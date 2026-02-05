@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
+from psycopg.rows import dict_row
 import os
 from datetime import datetime
 from typing import List, Dict, Any
@@ -24,7 +24,7 @@ def get_db_connection():
     if not database_url:
         raise Exception("DATABASE_URL environment variable not set")
     
-    conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
+    conn = psycopg.connect(database_url, row_factory=dict_row)
     return conn
 
 @app.get("/")
