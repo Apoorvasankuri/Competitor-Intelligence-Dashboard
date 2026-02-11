@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import psycopg
-from psycopg.rows import dict_row
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import os
 from datetime import datetime
 from typing import List, Dict, Any
@@ -24,7 +24,7 @@ def get_db_connection():
     if not database_url:
         raise Exception("DATABASE_URL environment variable not set")
     
-    conn = psycopg.connect(database_url, row_factory=dict_row)
+    conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
     return conn
 
 @app.get("/")
@@ -56,13 +56,7 @@ def get_all_data():
                 publishedate,
                 sbu,
                 competitor,
-                matched_sbu,
-                relevance_score,
-                confidance_score,
                 scraped_content,
-                sbu_tagging,
-                category_tag,
-                kec_business_summary,
                 created_at
             FROM competitor_data
             ORDER BY publishedate DESC
