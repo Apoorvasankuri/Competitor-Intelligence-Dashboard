@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import psycopg
-from psycopg.rows import dict_row
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import os
 from datetime import datetime
 from typing import List, Dict, Any
@@ -24,7 +24,7 @@ def get_db_connection():
     if not database_url:
         raise Exception("DATABASE_URL environment variable not set")
     
-    conn = psycopg.connect(database_url, row_factory=dict_row)
+    conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
     return conn
 
 @app.get("/")
@@ -39,8 +39,8 @@ def read_root():
 @app.get("/api/data")
 def get_all_data():
     """
-    Get all competitor data from the database
-    This endpoint returns all records for the dashboard
+    Get all processed competitor data from the database
+    This endpoint returns all processed records for the dashboard
     """
     try:
         conn = get_db_connection()
@@ -49,17 +49,18 @@ def get_all_data():
         query = """
             SELECT 
                 id,
-                keyword,
-                newstitle,
-                source,
+                published_date AS publishedate,
+                news_title AS newstitle,
                 link,
-                publishedate,
-                sbu,
-                competitor,
+                relevance_score,
+                competitor_tagging AS competitor,
+                sbu_tagging AS sbu,
+                category_tag,
+                summary AS kec_business_summary,
                 scraped_content,
-                created_at
-            FROM competitor_data
-            ORDER BY publishedate DESC
+                processed_at AS created_at
+            FROM processed_articles
+            ORDER BY published_date DESC
         """
         
         cur.execute(query)
@@ -70,9 +71,9 @@ def get_all_data():
         
         # Convert date objects to strings for JSON serialization
         for row in results:
-            if row.get('publishedate'):
+            if row['publishedate']:
                 row['publishedate'] = row['publishedate'].isoformat()
-            if row.get('created_at'):
+            if row['created_at']:
                 row['created_at'] = row['created_at'].isoformat()
         
         return {
@@ -95,24 +96,32 @@ def get_statistics():
         cur = conn.cursor()
         
         # Total articles
-        cur.execute("SELECT COUNT(*) as total FROM competitor_data")
+        cur.execute("SELECT COUNT(*) as total FROM processed_articles")
         total = cur.fetchone()['total']
         
         # Unique SBUs
-        cur.execute("SELECT COUNT(DISTINCT sbu) as count FROM competitor_data WHERE sbu IS NOT NULL")
+        cur.execute("SELECT COUNT(DISTINCT sbu_tagging) as count FROM processed_articles WHERE sbu_tagging IS NOT NULL")
         unique_sbus = cur.fetchone()['count']
         
         # Unique Competitors
-        cur.execute("SELECT COUNT(DISTINCT competitor) as count FROM competitor_data WHERE competitor IS NOT NULL")
+        cur.execute("SELECT COUNT(DISTINCT competitor_tagging) as count FROM processed_articles WHERE competitor_tagging IS NOT NULL AND competitor_tagging != '-'")
         unique_competitors = cur.fetchone()['count']
         
         # Recent articles (last 7 days)
         cur.execute("""
             SELECT COUNT(*) as count 
-            FROM competitor_data 
-            WHERE publishedate >= CURRENT_DATE - INTERVAL '7 days'
+            FROM processed_articles 
+            WHERE published_date >= CURRENT_DATE - INTERVAL '7 days'
         """)
         recent = cur.fetchone()['count']
+        
+        # High relevance articles (score >= 70)
+        cur.execute("""
+            SELECT COUNT(*) as count 
+            FROM processed_articles 
+            WHERE relevance_score >= 70
+        """)
+        high_relevance = cur.fetchone()['count']
         
         cur.close()
         conn.close()
@@ -123,7 +132,8 @@ def get_statistics():
                 "total_articles": total,
                 "unique_sbus": unique_sbus,
                 "unique_competitors": unique_competitors,
-                "recent_articles": recent
+                "recent_articles": recent,
+                "high_relevance_articles": high_relevance
             }
         }
     
@@ -154,3 +164,27 @@ def health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+@app.get("/api/raw-count")
+def get_raw_count():
+    """
+    Get count of unprocessed articles in raw_scraped_articles
+    Useful for monitoring the pipeline
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("SELECT COUNT(*) as count FROM raw_scraped_articles")
+        count = cur.fetchone()['count']
+        
+        cur.close()
+        conn.close()
+        
+        return {
+            "status": "success",
+            "unprocessed_articles": count
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
