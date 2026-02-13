@@ -24,7 +24,9 @@ def get_db_connection():
     if not database_url:
         raise Exception("DATABASE_URL environment variable not set")
     
-    conn = psycopg2.connect(database_url, cursor_factory=RealDictCursor)
+    # CHANGED: psycopg2.connect → psycopg.connect
+    # CHANGED: cursor_factory → row_factory
+    conn = psycopg.connect(database_url)
     return conn
 
 @app.get("/")
@@ -44,7 +46,8 @@ def get_all_data():
     """
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
+        # CHANGED: Add row_factory=dict_row here
+        cur = conn.cursor(row_factory=dict_row)
         
         query = """
             SELECT 
@@ -93,7 +96,8 @@ def get_statistics():
     """
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
+        # CHANGED: Add row_factory=dict_row here
+        cur = conn.cursor(row_factory=dict_row)
         
         # Total articles
         cur.execute("SELECT COUNT(*) as total FROM processed_articles")
@@ -173,7 +177,8 @@ def get_raw_count():
     """
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
+        # CHANGED: Add row_factory=dict_row here
+        cur = conn.cursor(row_factory=dict_row)
         
         cur.execute("SELECT COUNT(*) as count FROM raw_scraped_articles")
         count = cur.fetchone()['count']
