@@ -55,15 +55,20 @@ def get_all_data():
                 published_date AS publishedate,
                 news_title AS newstitle,
                 link,
+                "Source",
                 relevance_score,
                 competitor_tagging AS competitor,
                 sbu_tagging AS sbu,
                 category_tag,
                 summary AS kec_business_summary,
                 scraped_content,
+                contract_value_inr_crore,
+                geography,
+                competitor_tier,
+                rank_score,
                 processed_at AS created_at
             FROM processed_articles
-            ORDER BY published_date DESC
+            ORDER BY rank_score DESC, published_date DESC
         """
         
         cur.execute(query)
