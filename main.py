@@ -3,31 +3,53 @@ from fastapi.middleware.cors import CORSMiddleware
 import psycopg
 from psycopg.rows import dict_row
 import os
-from datetime import datetime
-from typing import List, Dict, Any
+from datetime import datetime, date
+from decimal import Decimal
+import math
 
 app = FastAPI(title="Competitor Intelligence API")
 
-# CORS middleware to allow your frontend to access this API
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your Vercel domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Database connection function
 def get_db_connection():
     """Create and return a database connection"""
     database_url = os.environ.get('DATABASE_URL')
     if not database_url:
         raise Exception("DATABASE_URL environment variable not set")
     
-    # CHANGED: psycopg2.connect → psycopg.connect
-    # CHANGED: cursor_factory → row_factory
-    conn = psycopg.connect(database_url)
+    conn = psycopg.connect(database_url, row_factory=dict_row)
     return conn
+
+
+def safe_float(value):
+    """Convert to float, handling NaN and infinity"""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (ValueError, TypeError):
+        return None
+
+
+def safe_int(value):
+    """Convert to int safely"""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
 
 @app.get("/")
 def read_root():
@@ -38,126 +60,102 @@ def read_root():
         "timestamp": datetime.now().isoformat()
     }
 
+
 @app.get("/api/data")
 def get_all_data():
-    """
-    Get all processed competitor data from the database
-    This endpoint returns all processed records for the dashboard
-    """
+    """Get all processed competitor data from the database"""
     try:
         conn = get_db_connection()
-        # CHANGED: Add row_factory=dict_row here
-        cur = conn.cursor(row_factory=dict_row)
+        cur = conn.cursor()
         
         query = """
             SELECT 
                 id,
-                published_date AS publishedate,
-                news_title AS newstitle,
+                published_date,
+                news_title,
                 link,
                 "Source",
                 relevance_score,
                 competitor_tagging,
-                sbu_tagging AS sbu,
+                sbu_tagging,
                 category_tag,
-                summary AS kec_business_summary,
+                summary,
                 scraped_content,
                 contract_value_inr_crore,
                 geography,
                 competitor_tier,
                 rank_score,
-                processed_at AS created_at
+                processed_at
             FROM processed_articles
-            ORDER BY rank_score DESC, published_date DESC
+            ORDER BY 
+                CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
+                rank_score DESC,
+                published_date DESC
         """
         
         cur.execute(query)
-        results = cur.fetchall()
+        raw_results = cur.fetchall()
         
         cur.close()
         conn.close()
         
-        # Convert data types for JSON serialization
-        for row in results:
-            # Convert dates to strings
-            if row['publishedate']:
-                row['publishedate'] = row['publishedate'].isoformat()
-            if row['created_at']:
-                row['created_at'] = row['created_at'].isoformat()
-            
-            # Convert contract_value_inr_crore to float (or None)
-            if row.get('contract_value_inr_crore') is not None:
-                try:
-                    row['contract_value_inr_crore'] = float(row['contract_value_inr_crore'])
-                except (ValueError, TypeError):
-                    row['contract_value_inr_crore'] = None
-            
-            # Convert rank_score to int (or 0)
-            if row.get('rank_score') is not None:
-                try:
-                    row['rank_score'] = int(row['rank_score'])
-                except (ValueError, TypeError):
-                    row['rank_score'] = 0
-            
-            # Convert relevance_score to int (or 0)
-            if row.get('relevance_score') is not None:
-                try:
-                    row['relevance_score'] = int(row['relevance_score'])
-                except (ValueError, TypeError):
-                    row['relevance_score'] = 0
-            
-            # Convert competitor_tier to int (or None)
-            if row.get('competitor_tier') is not None:
-                try:
-                    row['competitor_tier'] = int(row['competitor_tier'])
-                except (ValueError, TypeError):
-                    row['competitor_tier'] = None        
+        # Manually build clean result list
+        clean_results = []
+        for row in raw_results:
+            clean_row = {
+                'id': safe_int(row.get('id')),
+                'publishedate': row['published_date'].isoformat() if row.get('published_date') else None,
+                'newstitle': str(row['news_title']) if row.get('news_title') else '',
+                'link': str(row['link']) if row.get('link') else '',
+                'Source': str(row['Source']) if row.get('Source') else '',
+                'relevance_score': safe_int(row.get('relevance_score')) or 0,
+                'competitor_tagging': str(row['competitor_tagging']) if row.get('competitor_tagging') else '-',
+                'sbu': str(row['sbu_tagging']) if row.get('sbu_tagging') else 'General',
+                'category_tag': str(row['category_tag']) if row.get('category_tag') else 'not_analyzed',
+                'kec_business_summary': str(row['summary']) if row.get('summary') else '',
+                'scraped_content': str(row['scraped_content']) if row.get('scraped_content') else '',
+                'contract_value_inr_crore': safe_float(row.get('contract_value_inr_crore')),
+                'geography': str(row['geography']) if row.get('geography') and str(row['geography']) != 'None' else None,
+                'competitor_tier': safe_int(row.get('competitor_tier')),
+                'rank_score': safe_int(row.get('rank_score')) or 0,
+                'created_at': row['processed_at'].isoformat() if row.get('processed_at') else None
+            }
+            clean_results.append(clean_row)
+        
         return {
             "status": "success",
-            "count": len(results),
-            "data": results
+            "count": len(clean_results),
+            "data": clean_results
         }
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        import traceback
+        raise HTTPException(status_code=500, detail={
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        })
+
 
 @app.get("/api/stats")
 def get_statistics():
-    """
-    Get dashboard statistics
-    Returns summary stats for the overview page
-    """
+    """Get dashboard statistics"""
     try:
         conn = get_db_connection()
-        # CHANGED: Add row_factory=dict_row here
-        cur = conn.cursor(row_factory=dict_row)
+        cur = conn.cursor()
         
-        # Total articles
         cur.execute("SELECT COUNT(*) as total FROM processed_articles")
         total = cur.fetchone()['total']
         
-        # Unique SBUs
         cur.execute("SELECT COUNT(DISTINCT sbu_tagging) as count FROM processed_articles WHERE sbu_tagging IS NOT NULL")
         unique_sbus = cur.fetchone()['count']
         
-        # Unique Competitors
         cur.execute("SELECT COUNT(DISTINCT competitor_tagging) as count FROM processed_articles WHERE competitor_tagging IS NOT NULL AND competitor_tagging != '-'")
         unique_competitors = cur.fetchone()['count']
         
-        # Recent articles (last 7 days)
-        cur.execute("""
-            SELECT COUNT(*) as count 
-            FROM processed_articles 
-            WHERE published_date >= CURRENT_DATE - INTERVAL '7 days'
-        """)
+        cur.execute("SELECT COUNT(*) as count FROM processed_articles WHERE published_date >= CURRENT_DATE - INTERVAL '7 days'")
         recent = cur.fetchone()['count']
         
-        # High relevance articles (score >= 70)
-        cur.execute("""
-            SELECT COUNT(*) as count 
-            FROM processed_articles 
-            WHERE relevance_score >= 70
-        """)
+        cur.execute("SELECT COUNT(*) as count FROM processed_articles WHERE relevance_score >= 70")
         high_relevance = cur.fetchone()['count']
         
         cur.close()
@@ -166,22 +164,21 @@ def get_statistics():
         return {
             "status": "success",
             "stats": {
-                "total_articles": total,
-                "unique_sbus": unique_sbus,
-                "unique_competitors": unique_competitors,
-                "recent_articles": recent,
-                "high_relevance_articles": high_relevance
+                "total_articles": int(total),
+                "unique_sbus": int(unique_sbus),
+                "unique_competitors": int(unique_competitors),
+                "recent_articles": int(recent),
+                "high_relevance_articles": int(high_relevance)
             }
         }
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+
 @app.get("/api/health")
 def health_check():
-    """
-    Health check with database connectivity test
-    """
+    """Health check with database connectivity test"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -202,16 +199,13 @@ def health_check():
             "timestamp": datetime.now().isoformat()
         }
 
+
 @app.get("/api/raw-count")
 def get_raw_count():
-    """
-    Get count of unprocessed articles in raw_scraped_articles
-    Useful for monitoring the pipeline
-    """
+    """Get count of unprocessed articles"""
     try:
         conn = get_db_connection()
-        # CHANGED: Add row_factory=dict_row here
-        cur = conn.cursor(row_factory=dict_row)
+        cur = conn.cursor()
         
         cur.execute("SELECT COUNT(*) as count FROM raw_scraped_articles")
         count = cur.fetchone()['count']
@@ -221,7 +215,7 @@ def get_raw_count():
         
         return {
             "status": "success",
-            "unprocessed_articles": count
+            "unprocessed_articles": int(count)
         }
     
     except Exception as e:
