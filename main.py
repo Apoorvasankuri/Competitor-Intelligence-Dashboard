@@ -77,13 +77,41 @@ def get_all_data():
         cur.close()
         conn.close()
         
-        # Convert date objects to strings for JSON serialization
+        # Convert data types for JSON serialization
         for row in results:
+            # Convert dates to strings
             if row['publishedate']:
                 row['publishedate'] = row['publishedate'].isoformat()
             if row['created_at']:
                 row['created_at'] = row['created_at'].isoformat()
-        
+            
+            # Convert contract_value_inr_crore to float (or None)
+            if row.get('contract_value_inr_crore') is not None:
+                try:
+                    row['contract_value_inr_crore'] = float(row['contract_value_inr_crore'])
+                except (ValueError, TypeError):
+                    row['contract_value_inr_crore'] = None
+            
+            # Convert rank_score to int (or 0)
+            if row.get('rank_score') is not None:
+                try:
+                    row['rank_score'] = int(row['rank_score'])
+                except (ValueError, TypeError):
+                    row['rank_score'] = 0
+            
+            # Convert relevance_score to int (or 0)
+            if row.get('relevance_score') is not None:
+                try:
+                    row['relevance_score'] = int(row['relevance_score'])
+                except (ValueError, TypeError):
+                    row['relevance_score'] = 0
+            
+            # Convert competitor_tier to int (or None)
+            if row.get('competitor_tier') is not None:
+                try:
+                    row['competitor_tier'] = int(row['competitor_tier'])
+                except (ValueError, TypeError):
+                    row['competitor_tier'] = None        
         return {
             "status": "success",
             "count": len(results),
