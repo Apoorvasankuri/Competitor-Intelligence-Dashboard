@@ -57,7 +57,7 @@ def get_all_data():
                 link,
                 "Source",
                 relevance_score,
-                competitor_tagging AS competitor,
+                competitor_tagging,
                 sbu_tagging AS sbu,
                 category_tag,
                 summary AS kec_business_summary,
