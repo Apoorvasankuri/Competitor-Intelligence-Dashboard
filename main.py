@@ -220,9 +220,14 @@ def get_raw_count():
             "status": "success",
             "unprocessed_articles": int(count)
         }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-    @app.get("/api/export-csv")
+
+@app.get("/api/export-csv")
 def export_csv(start_date: str = '2026-02-25', end_date: str = '2026-03-01'):
+    """Export processed articles as CSV for a date range"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -254,5 +259,3 @@ def export_csv(start_date: str = '2026-02-25', end_date: str = '2026-03-01'):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
