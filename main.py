@@ -1,4 +1,7 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+import csv
+import io
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg
 from psycopg.rows import dict_row
@@ -217,6 +220,39 @@ def get_raw_count():
             "status": "success",
             "unprocessed_articles": int(count)
         }
-    
+
+    @app.get("/api/export-csv")
+def export_csv(start_date: str = '2026-02-25', end_date: str = '2026-03-01'):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT 
+                id, published_date, news_title, link, "Source",
+                relevance_score, competitor_tagging, sbu_tagging,
+                category_tag, summary, contract_value_inr_crore,
+                geography, competitor_tier, rank_score
+            FROM processed_articles
+            WHERE published_date >= %s
+            AND published_date < %s
+            ORDER BY published_date DESC
+        """, (start_date, end_date))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        output = io.StringIO()
+        if rows:
+            writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: v.isoformat() if isinstance(v, (datetime, date)) else v for k, v in row.items()})
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=export_{start_date}_{end_date}.csv"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
