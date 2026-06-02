@@ -643,7 +643,16 @@
 
     <script>
         // API Configuration
-        const API_BASE_URL = 'https://competitor-intelligence-dashboard.onrender.com';
+        var API_BASE_URL = 'https://competitor-intelligence-dashboard.onrender.com';
+        var LOCAL_API = 'http://127.0.0.1:8000';
+
+        // ─── AUTH CHECK ───────────────────────────────────────────────────────────────
+        var kecToken = localStorage.getItem('kec_token');
+        var kecUser = JSON.parse(localStorage.getItem('kec_user') || 'null');
+
+        if (!kecToken || !kecUser) {
+            window.location.href = 'login.html';
+        }
         
         // Global state management
         let appData = {
@@ -658,10 +667,24 @@
             isLoading: false
         };
 
-        // Initialize app
         function initApp() {
-            // Auto-load data from API on page load
+            // Show user info in toolbar
+            var userBadge = document.getElementById('userBadge');
+            if (userBadge && kecUser) {
+                userBadge.innerHTML = '<span style="font-size:13px;font-weight:600;color:var(--navy);">' + kecUser.name + '</span>' +
+                    '<span style="font-size:11px;color:var(--text-secondary);margin-left:8px;background:var(--blue-pale);padding:3px 10px;border-radius:12px;border:1px solid var(--blue-border);">' + kecUser.sbu_profile + '</span>' +
+                    '<button onclick="doLogout()" style="margin-left:12px;padding:6px 14px;background:transparent;border:1.5px solid var(--champagne);border-radius:6px;font-size:12px;font-weight:600;color:var(--text-secondary);cursor:pointer;font-family:Montserrat,sans-serif;">Sign Out</button>';
+            }
             loadDataFromAPI();
+        }
+
+        function doLogout() {
+            if (kecToken) {
+                fetch(LOCAL_API + '/api/auth/logout?token=' + kecToken, { method: 'POST' }).catch(function() {});
+            }
+            localStorage.removeItem('kec_token');
+            localStorage.removeItem('kec_user');
+            window.location.href = 'login.html';
         }
         
         // Fetch data from API
@@ -670,7 +693,8 @@
                 appData.isLoading = true;
                 updateStatusBadge('Loading data...', 'loading');
                 
-                const response = await fetch(`${API_BASE_URL}/api/data`);
+                var url = kecUser && kecToken ? LOCAL_API + '/api/data/profile?token=' + kecToken : API_BASE_URL + '/api/data';
+                var response = await fetch(url);
                 
                 if (!response.ok) {
                     throw new Error(`API Error: ${response.status}`);
