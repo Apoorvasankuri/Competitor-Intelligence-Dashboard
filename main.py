@@ -798,6 +798,11 @@ def login(req: LoginRequest):
         if not user:
             raise HTTPException(status_code=401, detail="Email not found. Please contact your administrator.")
 
+        # Admin accounts require password
+        if user['is_admin']:
+            if not req.password or not verify_password(req.password, user['password_hash']):
+                raise HTTPException(status_code=401, detail="Invalid password.")
+
         # Update last login
         cur = conn.cursor()
         cur.execute("UPDATE users SET last_login = NOW() WHERE id = %s", (user['id'],))
