@@ -676,158 +676,151 @@ def group_articles_for_email(articles):
 
 
 def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
-    """
-    Build interactive HTML email with SBU tabs.
-    articles_by_sbu: { "Intl T&D": [...], "Civil": [...] }
-    If only one SBU, no tabs shown.
-    """
-    sbu_list = list(articles_by_sbu.keys())
-    show_tabs = len(sbu_list) > 1
-
-    def render_article_item(article, idx):
-        title = article.get('title', '')
-        summary = article.get('summary', '')
-        link = article.get('link', '#')
-        date = article.get('date', '')
-        source = article.get('source', '')
-        competitors = article.get('competitors', [])
-
-        # Bold competitor names in summary
-        bolded = summary
-        for c in sorted(competitors, key=len, reverse=True):
-            if c and c != '-':
-                bolded = bolded.replace(c, f'<strong>{c}</strong>')
-
-        # Format date
-        try:
-            from datetime import datetime
-            d = datetime.fromisoformat(date)
-            fd = d.strftime('%b %d')
-        except:
-            fd = date[:10] if date else ''
-
-        competitor_tags = ''.join([
-            f'<span style="background:rgba(15,43,76,0.08);padding:2px 8px;border-radius:10px;font-size:11px;color:#0F2B4C;font-weight:600;margin-right:4px;">{c}</span>'
-            for c in competitors if c and c != '-'
-        ])
-
-        border = 'border-bottom:1px solid #E5E2D0;' if idx > 0 else ''
-
-        return f"""
-        <li style="padding:16px 0;{border}list-style:none;">
-            <div style="font-size:14px;color:#333333;line-height:1.7;">{bolded}</div>
-            <div style="margin-top:6px;font-size:12px;color:#666666;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-                <span>{fd}</span>
-                {'<span style="color:#E5E2D0;">|</span><span style="font-style:italic;">' + source + '</span>' if source else ''}
-                {'<span style="color:#E5E2D0;">|</span>' + competitor_tags if competitor_tags else ''}
-                <a href="{link}" style="color:#2E6EB5;font-size:11px;font-weight:600;text-decoration:none;">Read more →</a>
-            </div>
-        </li>
-        """
-
-    def render_sbu_content(sbu, articles, tab_id):
+    def render_articles(sbu, articles):
         grouped = group_articles_for_email(articles)
         if not grouped:
-            return f'<div id="tab_{tab_id}" class="sbu-panel" style="display:none;"><p style="color:#666;padding:20px 0;">No articles this week for {sbu}.</p></div>'
+            return f'<tr><td style="padding:16px;color:#666666;font-size:14px;font-family:Arial,sans-serif;">No articles this week for {sbu}.</td></tr>'
 
-        content = f'<div id="tab_{tab_id}" class="sbu-panel" style="display:none;">'
+        content = ''
         for cat, items in grouped.items():
+            # Category header row
             content += f"""
-            <div style="margin-bottom:24px;">
-                <div style="background:#0F2B4C;color:white;padding:10px 16px;border-radius:6px 6px 0 0;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">{cat.upper()}</div>
-                <div style="border:1px solid #E5E2D0;border-top:none;border-radius:0 0 6px 6px;padding:0 16px;">
-                    <ul style="padding:0;margin:0;">
-                        {''.join([render_article_item(a, i) for i, a in enumerate(items)])}
-                    </ul>
-                </div>
-            </div>
-            """
-        content += '</div>'
+            <tr>
+              <td style="background:#0F2B4C;color:#FFFFFF;padding:10px 16px;font-size:11px;font-weight:bold;letter-spacing:1px;font-family:Arial,sans-serif;">
+                {cat.upper()}
+              </td>
+            </tr>"""
+
+            for idx, article in enumerate(items):
+                title = article.get('title', '')
+                summary = article.get('summary', '') or title
+                link = article.get('link', '#')
+                date = article.get('date', '')
+                source = article.get('source', '')
+                competitors = article.get('competitors', [])
+
+                # Bold competitor names
+                for c in sorted(competitors, key=len, reverse=True):
+                    if c and c != '-':
+                        summary = summary.replace(c, f'<strong>{c}</strong>')
+
+                try:
+                    from datetime import datetime
+                    fd = datetime.fromisoformat(date).strftime('%b %d')
+                except:
+                    fd = date[:10] if date else ''
+
+                border_top = 'border-top:1px solid #E5E2D0;' if idx > 0 else ''
+
+                competitor_text = '  ·  '.join([c for c in competitors if c and c != '-'])
+
+                meta_line = fd
+                if source:
+                    meta_line += f'  ·  {source}'
+                if competitor_text:
+                    meta_line += f'  ·  {competitor_text}'
+
+                content += f"""
+                <tr>
+                  <td style="padding:14px 16px;{border_top}background:#FFFFFF;">
+                    <p style="margin:0 0 6px 0;font-size:14px;color:#333333;line-height:1.7;font-family:Arial,sans-serif;">{summary}</p>
+                    <p style="margin:0;font-size:12px;color:#666666;font-family:Arial,sans-serif;">
+                      {meta_line}
+                      &nbsp;&nbsp;<a href="{link}" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">Read more →</a>
+                    </p>
+                  </td>
+                </tr>"""
+
+            # Spacer between categories
+            content += '<tr><td style="padding:8px 0;background:#F9F8F3;"></td></tr>'
+
         return content
 
-    # Build tab buttons
-    tab_buttons = ''
-    if show_tabs:
-        for i, sbu in enumerate(sbu_list):
-            active_style = 'background:#0F2B4C;color:white;' if i == 0 else 'background:#F9F8F3;color:#0F2B4C;'
-            tab_buttons += f"""
-            <button 
-                onclick="showTab('{i}')" 
-                id="btn_{i}"
-                style="padding:10px 20px;border:2px solid #0F2B4C;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;font-family:Montserrat,sans-serif;margin-right:8px;{active_style}">
-                {sbu}
-            </button>
-            """
+    # Build full email body
+    sbu_sections = ''
+    for sbu, articles in articles_by_sbu.items():
+        rows = render_articles(sbu, articles)
+        sbu_sections += f"""
+        <!--  SBU HEADER  -->
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:8px;">
+          <tr>
+            <td style="background:#1A3D6D;padding:12px 20px;border-radius:6px;">
+              <p style="margin:0;font-size:13px;font-weight:bold;color:#C9A84C;letter-spacing:2px;text-transform:uppercase;font-family:Arial,sans-serif;">{sbu}</p>
+            </td>
+          </tr>
+        </table>
 
-    # Build all SBU panels
-    panels = ''
-    for i, (sbu, articles) in enumerate(articles_by_sbu.items()):
-        panels += render_sbu_content(sbu, articles, str(i))
+        <!--  SBU ARTICLES  -->
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
+          {rows}
+        </table>"""
 
-    html = f"""
-    <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:700px;margin:0 auto;background:#F9F8F3;">
-        
-        <!-- Header -->
-        <div style="background:linear-gradient(135deg,#0F2B4C,#1A3D6D);padding:32px;text-align:center;">
-            <h1 style="color:white;font-size:24px;margin:0;font-family:Georgia,serif;">Competitor Intelligence</h1>
-            <p style="color:#C9A84C;margin:8px 0 0 0;font-size:12px;letter-spacing:2px;text-transform:uppercase;">Weekly Action Digest</p>
-        </div>
+    return f"""<!DOCTYPE html>
+<html xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <!--[if mso]>
+  <xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml>
+  <![endif]-->
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#F9F8F3;">
 
-        <!-- Body -->
-        <div style="padding:32px;background:white;">
-            <p style="color:#333;font-size:15px;">Hi <strong>{recipient_name}</strong>,</p>
-            <p style="color:#666;font-size:14px;line-height:1.6;margin-bottom:24px;">
-                Here are this week's competitor intelligence highlights relevant to your business unit.
-            </p>
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F9F8F3;">
+    <tr>
+      <td align="center" style="padding:24px 16px;">
 
-            <!-- Tab Buttons -->
-            {'<div style="margin-bottom:24px;">' + tab_buttons + '</div>' if show_tabs else ''}
+        <!-- WRAPPER -->
+        <table width="660" cellpadding="0" cellspacing="0" border="0" style="max-width:660px;width:100%;">
 
-            <!-- SBU Panels -->
-            {panels}
+          <!-- HEADER -->
+          <tr>
+            <td style="background:#0F2B4C;padding:32px;text-align:center;">
+              <h1 style="margin:0;font-size:24px;color:#FFFFFF;font-family:Georgia,serif;font-weight:bold;">Competitor Intelligence</h1>
+              <p style="margin:8px 0 0 0;font-size:12px;color:#C9A84C;letter-spacing:3px;font-family:Arial,sans-serif;">WEEKLY ACTION DIGEST</p>
+            </td>
+          </tr>
 
-            <!-- Footer note -->
-            <div style="margin-top:32px;padding:16px;background:#F9F8F3;border-radius:6px;border-left:4px solid #C9A84C;">
-                <p style="color:#666;font-size:13px;margin:0;">
-                    This digest is personalized based on your SBU profile. 
-                    Log in to the <a href="https://competitor-intelligence-dashboard.onrender.com" style="color:#0F2B4C;font-weight:600;">KEC Intel Platform</a> for full details.
-                </p>
-            </div>
-        </div>
+          <!-- BODY -->
+          <tr>
+            <td style="background:#FFFFFF;padding:32px;">
 
-        <!-- Footer -->
-        <div style="background:#0F2B4C;padding:16px;text-align:center;">
-            <p style="color:rgba(255,255,255,0.5);font-size:12px;margin:0;">KEC Competitor Intelligence Platform · Weekly Digest</p>
-        </div>
-    </div>
+              <p style="margin:0 0 8px 0;font-size:15px;color:#333333;font-family:Arial,sans-serif;">Hi <strong>{recipient_name}</strong>,</p>
+              <p style="margin:0 0 28px 0;font-size:14px;color:#666666;line-height:1.6;font-family:Arial,sans-serif;">Here are this week's competitor intelligence highlights relevant to your business unit.</p>
 
-    <script>
-        // Show first tab on load
-        document.addEventListener('DOMContentLoaded', function() {{
-            showTab('0');
-        }});
-        // Fallback: show first tab immediately
-        (function() {{ showTab('0'); }})();
+              {sbu_sections}
 
-        function showTab(id) {{
-            // Hide all panels
-            var panels = document.querySelectorAll('.sbu-panel');
-            panels.forEach(function(p) {{ p.style.display = 'none'; }});
-            // Reset all buttons
-            var btns = document.querySelectorAll('[id^="btn_"]');
-            btns.forEach(function(b) {{ 
-                b.style.background = '#F9F8F3'; 
-                b.style.color = '#0F2B4C'; 
-            }});
-            // Show selected
-            var panel = document.getElementById('tab_' + id);
-            if (panel) panel.style.display = 'block';
-            var btn = document.getElementById('btn_' + id);
-            if (btn) {{ btn.style.background = '#0F2B4C'; btn.style.color = 'white'; }}
-        }}
-    </script>
-    """
-    return html
+              <!-- FOOTER NOTE -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-left:4px solid #C9A84C;background:#F9F8F3;margin-top:16px;">
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <p style="margin:0;font-size:13px;color:#666666;font-family:Arial,sans-serif;">
+                      Log in to the <a href="https://competitor-intelligence-dashboard.onrender.com" style="color:#0F2B4C;font-weight:bold;text-decoration:none;">KEC Intel Platform</a> for full details.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td style="background:#0F2B4C;padding:16px;text-align:center;">
+              <p style="margin:0;font-size:12px;color:rgba(255,255,255,0.5);font-family:Arial,sans-serif;">KEC Competitor Intelligence Platform · Weekly Digest</p>
+            </td>
+          </tr>
+
+        </table>
+        <!-- END WRAPPER -->
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>"""
+    
 
 @app.post("/api/send-digest")
 def send_weekly_digest(token: str = ""):
