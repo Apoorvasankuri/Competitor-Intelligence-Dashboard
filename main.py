@@ -1286,18 +1286,21 @@ def get_profile_data(token: str):
             """
             cur.execute(query)
         else:
-            query = """
+            sbus = [s.strip() for s in user['sbu_profile'].split(',') if s.strip()]
+            conditions = " OR ".join(["sbu_tagging ILIKE %s" for _ in sbus])
+            params = [f"%{sbu}%" for sbu in sbus]
+            query = f"""
                 SELECT id, published_date, news_title, link, "Source",
                     relevance_score, competitor_tagging, sbu_tagging,
                     category_tag, summary, contract_value_inr_crore,
                     geography, competitor_tier, rank_score, processed_at
                 FROM processed_articles
-                WHERE sbu_tagging ILIKE %s
+                WHERE {conditions}
                 ORDER BY 
                     CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
                     rank_score DESC, published_date DESC
             """
-            cur.execute(query, (f"%{user['sbu_profile']}%",))
+            cur.execute(query, params)
 
         raw_results = cur.fetchall()
         cur.close()
@@ -1373,17 +1376,20 @@ def chat(req: ChatRequest):
                 LIMIT 8
             """, (req.message,))
         else:
+            sbus = [s.strip() for s in sbu_profile.split(',') if s.strip()]
+            conditions = " OR ".join(["sbu_tagging ILIKE %s" for _ in sbus])
+            sbu_params = [f"%{sbu}%" for sbu in sbus]
             cur.execute("""
                 SELECT news_title, summary, category_tag, sbu_tagging,
                        competitor_tagging, published_date, link, geography,
                        contract_value_inr_crore
                 FROM processed_articles
-                WHERE sbu_tagging ILIKE %s
+                WHERE (""" + conditions + """)
                 AND to_tsvector('english', COALESCE(news_title,'') || ' ' || COALESCE(summary,''))
                     @@ plainto_tsquery('english', %s)
                 ORDER BY published_date DESC
                 LIMIT 8
-            """, (f'%{sbu_profile}%', req.message))
+            """, sbu_params + [req.message])
 
         db_results = cur.fetchall()
         cur.close()
