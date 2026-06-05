@@ -795,7 +795,7 @@ def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
                 <tr>
                   <td style="padding:14px 16px;">
                     <p style="margin:0;font-size:13px;color:#666666;font-family:Arial,sans-serif;">
-                      Log in to the <a href="https://competitor-intelligence-dashboard.onrender.com" style="color:#0F2B4C;font-weight:bold;text-decoration:none;">KEC Intel Platform</a> for full details.
+                      Log in to the <a href="https://competitor-intelligence-dashboard-u.vercel.app/index.html" style="color:#0F2B4C;font-weight:bold;text-decoration:none;">KEC Intel Platform</a> for full details.
                     </p>
                   </td>
                 </tr>
