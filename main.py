@@ -581,137 +581,395 @@ def preview_routing():
 
 import resend
 
-def build_email_html(recipient_name: str, articles: list) -> str:
-    """Build a clean HTML email for a recipient"""
+def deduplicate_articles(articles):
+    """Same deduplication logic as frontend Executive Summary"""
+    stop_words = {'a','an','the','and','or','in','on','at','to','for','of','with','by','is','was','has','this','that','their','these','will','been','also','from'}
     
-    grouped = {}
+    def jaccard(text1, text2):
+        w1 = [w for w in text1.lower().split() if len(w) > 3 and w not in stop_words]
+        w2 = [w for w in text2.lower().split() if len(w) > 3 and w not in stop_words]
+        if not w1 or not w2:
+            return 0
+        set2 = set(w2)
+        intersection = len([w for w in w1 if w in set2])
+        union = len(set(w1 + w2))
+        return intersection / union if union > 0 else 0
+
+    deduped = []
     for article in articles:
-        cat = article.get('category', 'General').title()
-        sbu = article.get('sbu', '')
-        key = f"{cat} — {sbu}"
-        if key not in grouped:
-            grouped[key] = []
-        grouped[key].append(article)
-    
-    html = f"""
-    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 700px; margin: 0 auto; background: #f9f8f3;">
-        <div style="background: linear-gradient(135deg, #0F2B4C, #1A3D6D); padding: 32px; text-align: center;">
-            <h1 style="color: white; font-size: 24px; margin: 0;">Competitor Intelligence</h1>
-            <p style="color: #C9A84C; margin: 8px 0 0 0; font-size: 13px; letter-spacing: 2px; text-transform: uppercase;">Weekly Action Digest</p>
-        </div>
-        <div style="padding: 32px; background: white;">
-            <p style="color: #333; font-size: 15px;">Hi <strong>{recipient_name}</strong>,</p>
-            <p style="color: #666; font-size: 14px; line-height: 1.6;">Here are this week's competitor intelligence items that require your attention. Please review and forward to relevant team members as needed.</p>
+        is_duplicate = False
+        for kept in deduped:
+            s1 = article.get('summary') or article.get('title') or ''
+            s2 = kept.get('summary') or kept.get('title') or ''
+            j = jaccard(s1, s2)
+
+            if j > 0.35:
+                is_duplicate = True
+                break
+
+            # Check shared competitors
+            c1 = set(article.get('competitors', []))
+            c2 = set(kept.get('competitors', []))
+            shared = c1 & c2
+
+            if not shared:
+                continue
+
+            v1 = article.get('contract_value')
+            v2 = kept.get('contract_value')
+            if v1 and v2 and abs(v1 - v2) / max(v1, v2) < 0.10:
+                is_duplicate = True
+                break
+
+            if shared and j > 0.20:
+                is_duplicate = True
+                break
+
+            g1 = (article.get('geography') or '').lower()
+            g2 = (kept.get('geography') or '').lower()
+            if shared and g1 and g2 and g1 == g2:
+                is_duplicate = True
+                break
+
+        if not is_duplicate:
+            deduped.append(article)
+
+    return deduped
+
+
+def group_articles_for_email(articles):
+    """Group by category, deduplicate, max 5 per category, in correct order"""
+    CATEGORY_ORDER = [
+        'order wins', 'bidding activity', 'project execution',
+        'mergers & acquisitions', 'partnerships & alliances',
+        'financial', 'new market entry', 'capacity expansion',
+        'regulatory & policy', 'partnerships & alliances'
+    ]
+    EXCLUDE_CATEGORIES = {'stock market', 'industry trends'}
+
+    grouped = {}
+    for a in articles:
+        cat = (a.get('category') or 'general').lower().strip()
+        if cat in EXCLUDE_CATEGORIES:
+            continue
+        if cat not in grouped:
+            grouped[cat] = []
+        grouped[cat].append(a)
+
+    # Sort each category by rank_score then date, deduplicate, limit to 5
+    result = {}
+    for cat, items in grouped.items():
+        items.sort(key=lambda x: (-(x.get('rank_score') or 0), x.get('date') or ''), )
+        items = deduplicate_articles(items)
+        result[cat] = items[:5]
+
+    # Order categories
+    ordered = {}
+    for cat in CATEGORY_ORDER:
+        if cat in result:
+            ordered[cat] = result[cat]
+    for cat in sorted(result.keys()):
+        if cat not in ordered:
+            ordered[cat] = result[cat]
+
+    return ordered
+
+
+def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
     """
-    
-    for group_key, group_articles in grouped.items():
-        html += f"""
-            <div style="margin: 24px 0;">
-                <div style="background: #0F2B4C; color: white; padding: 10px 16px; border-radius: 6px 6px 0 0; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">{group_key}</div>
-                <div style="border: 1px solid #E5E2D0; border-top: none; border-radius: 0 0 6px 6px;">
+    Build interactive HTML email with SBU tabs.
+    articles_by_sbu: { "Intl T&D": [...], "Civil": [...] }
+    If only one SBU, no tabs shown.
+    """
+    sbu_list = list(articles_by_sbu.keys())
+    show_tabs = len(sbu_list) > 1
+
+    def render_article_item(article, idx):
+        title = article.get('title', '')
+        summary = article.get('summary', '')
+        link = article.get('link', '#')
+        date = article.get('date', '')
+        source = article.get('source', '')
+        competitors = article.get('competitors', [])
+
+        # Bold competitor names in summary
+        bolded = summary
+        for c in sorted(competitors, key=len, reverse=True):
+            if c and c != '-':
+                bolded = bolded.replace(c, f'<strong>{c}</strong>')
+
+        # Format date
+        try:
+            from datetime import datetime
+            d = datetime.fromisoformat(date)
+            fd = d.strftime('%b %d')
+        except:
+            fd = date[:10] if date else ''
+
+        competitor_tags = ''.join([
+            f'<span style="background:rgba(15,43,76,0.08);padding:2px 8px;border-radius:10px;font-size:11px;color:#0F2B4C;font-weight:600;margin-right:4px;">{c}</span>'
+            for c in competitors if c and c != '-'
+        ])
+
+        border = 'border-bottom:1px solid #E5E2D0;' if idx > 0 else ''
+
+        return f"""
+        <li style="padding:16px 0;{border}list-style:none;">
+            <div style="font-size:14px;color:#333333;line-height:1.7;">{bolded}</div>
+            <div style="margin-top:6px;font-size:12px;color:#666666;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                <span>{fd}</span>
+                {'<span style="color:#E5E2D0;">|</span><span style="font-style:italic;">' + source + '</span>' if source else ''}
+                {'<span style="color:#E5E2D0;">|</span>' + competitor_tags if competitor_tags else ''}
+                <a href="{link}" style="color:#2E6EB5;font-size:11px;font-weight:600;text-decoration:none;">Read more →</a>
+            </div>
+        </li>
         """
-        for i, article in enumerate(group_articles):
-            border = "border-bottom: 1px solid #E5E2D0;" if i < len(group_articles) - 1 else ""
-            html += f"""
-                    <div style="padding: 16px; {border}">
-                        <a href="{article.get('link', '#')}" style="color: #0F2B4C; font-weight: 600; font-size: 14px; text-decoration: none; line-height: 1.4;">{article.get('title', '')}</a>
-                        <p style="color: #666; font-size: 13px; margin: 8px 0 0 0; line-height: 1.6;">{article.get('summary', '')[:300]}...</p>
-                        <p style="color: #999; font-size: 11px; margin: 6px 0 0 0;">{article.get('date', '')}</p>
-                    </div>
+
+    def render_sbu_content(sbu, articles, tab_id):
+        grouped = group_articles_for_email(articles)
+        if not grouped:
+            return f'<div id="tab_{tab_id}" class="sbu-panel" style="display:none;"><p style="color:#666;padding:20px 0;">No articles this week for {sbu}.</p></div>'
+
+        content = f'<div id="tab_{tab_id}" class="sbu-panel" style="display:none;">'
+        for cat, items in grouped.items():
+            content += f"""
+            <div style="margin-bottom:24px;">
+                <div style="background:#0F2B4C;color:white;padding:10px 16px;border-radius:6px 6px 0 0;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">{cat.upper()}</div>
+                <div style="border:1px solid #E5E2D0;border-top:none;border-radius:0 0 6px 6px;padding:0 16px;">
+                    <ul style="padding:0;margin:0;">
+                        {''.join([render_article_item(a, i) for i, a in enumerate(items)])}
+                    </ul>
+                </div>
+            </div>
             """
-        html += "</div></div>"
-    
-    html += f"""
-            <div style="margin-top: 32px; padding: 16px; background: #f9f8f3; border-radius: 6px; border-left: 4px solid #C9A84C;">
-                <p style="color: #666; font-size: 13px; margin: 0;">To assign any item to a team member, simply <strong>forward this email</strong> to them with your instructions.</p>
+        content += '</div>'
+        return content
+
+    # Build tab buttons
+    tab_buttons = ''
+    if show_tabs:
+        for i, sbu in enumerate(sbu_list):
+            active_style = 'background:#0F2B4C;color:white;' if i == 0 else 'background:#F9F8F3;color:#0F2B4C;'
+            tab_buttons += f"""
+            <button 
+                onclick="showTab('{i}')" 
+                id="btn_{i}"
+                style="padding:10px 20px;border:2px solid #0F2B4C;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;font-family:Montserrat,sans-serif;margin-right:8px;{active_style}">
+                {sbu}
+            </button>
+            """
+
+    # Build all SBU panels
+    panels = ''
+    for i, (sbu, articles) in enumerate(articles_by_sbu.items()):
+        panels += render_sbu_content(sbu, articles, str(i))
+
+    html = f"""
+    <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:700px;margin:0 auto;background:#F9F8F3;">
+        
+        <!-- Header -->
+        <div style="background:linear-gradient(135deg,#0F2B4C,#1A3D6D);padding:32px;text-align:center;">
+            <h1 style="color:white;font-size:24px;margin:0;font-family:Georgia,serif;">Competitor Intelligence</h1>
+            <p style="color:#C9A84C;margin:8px 0 0 0;font-size:12px;letter-spacing:2px;text-transform:uppercase;">Weekly Action Digest</p>
+        </div>
+
+        <!-- Body -->
+        <div style="padding:32px;background:white;">
+            <p style="color:#333;font-size:15px;">Hi <strong>{recipient_name}</strong>,</p>
+            <p style="color:#666;font-size:14px;line-height:1.6;margin-bottom:24px;">
+                Here are this week's competitor intelligence highlights relevant to your business unit.
+            </p>
+
+            <!-- Tab Buttons -->
+            {'<div style="margin-bottom:24px;">' + tab_buttons + '</div>' if show_tabs else ''}
+
+            <!-- SBU Panels -->
+            {panels}
+
+            <!-- Footer note -->
+            <div style="margin-top:32px;padding:16px;background:#F9F8F3;border-radius:6px;border-left:4px solid #C9A84C;">
+                <p style="color:#666;font-size:13px;margin:0;">
+                    This digest is personalized based on your SBU profile. 
+                    Log in to the <a href="https://competitor-intelligence-dashboard.onrender.com" style="color:#0F2B4C;font-weight:600;">KEC Intel Platform</a> for full details.
+                </p>
             </div>
         </div>
-        <div style="background: #0F2B4C; padding: 16px; text-align: center;">
-            <p style="color: rgba(255,255,255,0.5); font-size: 12px; margin: 0;">KEC Competitor Intelligence Platform · Weekly Digest</p>
+
+        <!-- Footer -->
+        <div style="background:#0F2B4C;padding:16px;text-align:center;">
+            <p style="color:rgba(255,255,255,0.5);font-size:12px;margin:0;">KEC Competitor Intelligence Platform · Weekly Digest</p>
         </div>
     </div>
+
+    <script>
+        // Show first tab on load
+        document.addEventListener('DOMContentLoaded', function() {{
+            showTab('0');
+        }});
+        // Fallback: show first tab immediately
+        (function() {{ showTab('0'); }})();
+
+        function showTab(id) {{
+            // Hide all panels
+            var panels = document.querySelectorAll('.sbu-panel');
+            panels.forEach(function(p) {{ p.style.display = 'none'; }});
+            // Reset all buttons
+            var btns = document.querySelectorAll('[id^="btn_"]');
+            btns.forEach(function(b) {{ 
+                b.style.background = '#F9F8F3'; 
+                b.style.color = '#0F2B4C'; 
+            }});
+            // Show selected
+            var panel = document.getElementById('tab_' + id);
+            if (panel) panel.style.display = 'block';
+            var btn = document.getElementById('btn_' + id);
+            if (btn) {{ btn.style.background = '#0F2B4C'; btn.style.color = 'white'; }}
+        }}
+    </script>
     """
     return html
 
-
 @app.post("/api/send-digest")
-def send_weekly_digest():
-    """Send weekly digest emails to all recipients based on routing matrix"""
+def send_weekly_digest(token: str = ""):
+    """Send weekly digest emails based on user SBU profiles"""
     try:
+        if token:
+            user = get_user_from_token(token)
+            if not user or not user['is_admin']:
+                raise HTTPException(status_code=403, detail="Admin access required")
+
         resend.api_key = os.environ.get('RESEND_API_KEY')
         from_email = os.environ.get('RESEND_FROM', 'onboarding@resend.dev')
 
+        # ── Step 1: Get all active users ──────────────────────────────────────
+        local_conn = get_local_db()
+        local_cur = local_conn.cursor(cursor_factory=RealDictCursor)
+        local_cur.execute("""
+            SELECT id, name, email, sbu_profile, is_admin
+            FROM users WHERE is_active = TRUE
+        """)
+        users = local_cur.fetchall()
+        local_cur.close()
+        local_conn.close()
+
+        # ── Step 2: Get this week's articles ──────────────────────────────────
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, news_title, category_tag, sbu_tagging, summary, link, published_date
+            SELECT id, news_title, category_tag, sbu_tagging,
+                   summary, link, published_date, competitor_tagging,
+                   contract_value_inr_crore, geography, rank_score, "Source"
             FROM processed_articles
             WHERE published_date >= CURRENT_DATE - INTERVAL '7 days'
             AND category_tag IS NOT NULL
-            ORDER BY published_date DESC
+            ORDER BY rank_score DESC NULLS LAST, published_date DESC
         """)
-        articles = cur.fetchall()
+        raw_articles = cur.fetchall()
         cur.close()
         conn.close()
 
-        recipient_map = {}
-        for article in articles:
-            category = article.get('category_tag', '')
-            sbus = [s.strip() for s in (article.get('sbu_tagging') or '').split(',') if s.strip()]
-            recipients = get_recipients_for_article(category, sbus)
-            
-            for email in recipients:
-                if email not in recipient_map:
-                    recipient_map[email] = {
-                        "name": PEOPLE_NAMES.get(email, email),
-                        "email": email,
-                        "articles": []
-                    }
-                recipient_map[email]["articles"].append({
-                    "id": article.get('id'),
-                    "title": article.get('news_title'),
-                    "category": category,
-                    "sbu": article.get('sbu_tagging'),
-                    "summary": article.get('summary', ''),
-                    "link": article.get('link', '#'),
-                    "date": article.get('published_date', '').isoformat() if article.get('published_date') else '',
-                })
+        # Normalize articles
+        all_articles = []
+        for a in raw_articles:
+            competitors = [
+                c.strip() for c in (a.get('competitor_tagging') or '').split(',')
+                if c.strip() and c.strip() != '-'
+            ]
+            all_articles.append({
+                'id': a.get('id'),
+                'title': a.get('news_title', ''),
+                'category': a.get('category_tag', ''),
+                'sbu_tagging': a.get('sbu_tagging', ''),
+                'summary': a.get('summary', ''),
+                'link': a.get('link', '#'),
+                'date': a.get('published_date').isoformat() if a.get('published_date') else '',
+                'source': a.get('Source', ''),
+                'competitors': competitors,
+                'contract_value': safe_float(a.get('contract_value_inr_crore')),
+                'geography': a.get('geography'),
+                'rank_score': a.get('rank_score') or 0,
+            })
 
+        # ── Step 3: Send to each user ─────────────────────────────────────────
         sent = []
         failed = []
+        skipped = []
 
-        for email, data in recipient_map.items():
+        log_conn = get_local_db()
+        log_cur = log_conn.cursor()
+
+        for u in users:
+            sbu_profile = (u.get('sbu_profile') or '').strip()
+            is_admin = u.get('is_admin', False)
+
+            # Build articles_by_sbu dict
+            if is_admin or sbu_profile == 'Admin':
+                # Admin sees all SBUs
+                sbus = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
+                articles_by_sbu = {}
+                for sbu in sbus:
+                    sbu_articles = [
+                        a for a in all_articles
+                        if sbu.lower() in (a.get('sbu_tagging') or '').lower()
+                    ]
+                    if sbu_articles:
+                        articles_by_sbu[sbu] = sbu_articles
+            else:
+                # Handle comma-separated SBUs e.g. "Intl T&D,Civil"
+                sbus = [s.strip() for s in sbu_profile.split(',') if s.strip()]
+                articles_by_sbu = {}
+                for sbu in sbus:
+                    sbu_articles = [
+                        a for a in all_articles
+                        if sbu.lower() in (a.get('sbu_tagging') or '').lower()
+                    ]
+                    if sbu_articles:
+                        articles_by_sbu[sbu] = sbu_articles
+
+            if not articles_by_sbu:
+                skipped.append(u['email'])
+                continue
+
             try:
-                html = build_email_html(data['name'], data['articles'])
+                html = build_email_html(u['name'], articles_by_sbu)
+                to_email = os.environ.get('TEST_EMAIL', u['email']) \
+                    if os.environ.get('TEST_MODE') == 'true' else u['email']
+
                 resend.Emails.send({
                     "from": from_email,
-                    "to": [os.environ.get('TEST_EMAIL', email)] if os.environ.get('TEST_MODE') == 'true' else [email],
-                    "subject": f"[KEC Intel] Your Weekly Competitor Digest — {len(data['articles'])} items",
+                    "to": [to_email],
+                    "subject": f"[KEC Intel] Weekly Competitor Digest — {sbu_profile}",
                     "html": html,
                 })
-                sent.append(email)
-
-                local_conn = get_local_db()
-                local_cur = local_conn.cursor()
-                local_cur.execute("""
+                sent.append(u['email'])
+                log_cur.execute("""
                     INSERT INTO email_log (recipient_email, email_type, subject, status)
                     VALUES (%s, %s, %s, %s)
-                """, (email, 'weekly_digest', f"Weekly Digest — {len(data['articles'])} items", 'sent'))
-                local_conn.commit()
-                local_cur.close()
-                local_conn.close()
+                """, (u['email'], 'weekly_digest', f"Weekly Digest — {sbu_profile}", 'sent'))
 
             except Exception as e:
-                failed.append({"email": email, "error": str(e)})
+                failed.append({"email": u['email'], "error": str(e)})
+                log_cur.execute("""
+                    INSERT INTO email_log (recipient_email, email_type, subject, status)
+                    VALUES (%s, %s, %s, %s)
+                """, (u['email'], 'weekly_digest', f"Weekly Digest — {sbu_profile}", 'failed'))
+
+        log_conn.commit()
+        log_cur.close()
+        log_conn.close()
 
         return {
             "status": "success",
             "sent": len(sent),
+            "skipped": len(skipped),
             "failed": len(failed),
             "sent_to": sent,
+            "skipped_users": skipped,
             "failures": failed
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     # ─── AUTH & PROFILE SYSTEM ───────────────────────────────────────────────────
@@ -951,6 +1209,42 @@ def deactivate_user(user_id: int, token: str):
         cur.close()
         conn.close()
         return {"status": "success", "message": "User deactivated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    @app.put("/api/auth/users/{user_id}/activate")
+def activate_user(user_id: int, token: str):
+    """Activate a deactivated user — admin only"""
+    admin = get_user_from_token(token)
+    if not admin or not admin['is_admin']:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        conn = get_local_db()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET is_active = TRUE WHERE id = %s", (user_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"status": "success", "message": "User activated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/auth/users/{user_id}/delete")
+def delete_user(user_id: int, token: str):
+    """Permanently delete a user — admin only"""
+    admin = get_user_from_token(token)
+    if not admin or not admin['is_admin']:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        conn = get_local_db()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"status": "success", "message": "User deleted"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
