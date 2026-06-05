@@ -1211,8 +1211,9 @@ def deactivate_user(user_id: int, token: str):
         return {"status": "success", "message": "User deactivated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-    @app.put("/api/auth/users/{user_id}/activate")
+
+
+@app.put("/api/auth/users/{user_id}/activate")
 def activate_user(user_id: int, token: str):
     """Activate a deactivated user — admin only"""
     admin = get_user_from_token(token)
