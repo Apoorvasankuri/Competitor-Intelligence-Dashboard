@@ -1507,3 +1507,113 @@ Provide a helpful, concise answer with source citations."""
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/digest-preview")
+def digest_preview(token: str = ""):
+    """Get personalized email HTML for each user without sending"""
+    try:
+        if token:
+            user = get_user_from_token(token)
+            if not user or not user['is_admin']:
+                raise HTTPException(status_code=403, detail="Admin access required")
+
+        # Get all active users
+        local_conn = get_local_db()
+        local_cur = local_conn.cursor(cursor_factory=RealDictCursor)
+        local_cur.execute("""
+            SELECT id, name, email, sbu_profile, is_admin
+            FROM users WHERE is_active = TRUE
+        """)
+        users = local_cur.fetchall()
+        local_cur.close()
+        local_conn.close()
+
+        # Get this week's articles
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, news_title, category_tag, sbu_tagging,
+                   summary, link, published_date, competitor_tagging,
+                   contract_value_inr_crore, geography, rank_score, "Source"
+            FROM processed_articles
+            WHERE published_date >= CURRENT_DATE - INTERVAL '7 days'
+            AND category_tag IS NOT NULL
+            ORDER BY rank_score DESC NULLS LAST, published_date DESC
+        """)
+        raw_articles = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        # Normalize articles
+        all_articles = []
+        for a in raw_articles:
+            competitors = [
+                c.strip() for c in (a.get('competitor_tagging') or '').split(',')
+                if c.strip() and c.strip() != '-'
+            ]
+            all_articles.append({
+                'id': a.get('id'),
+                'title': a.get('news_title', ''),
+                'category': a.get('category_tag', ''),
+                'sbu_tagging': a.get('sbu_tagging', ''),
+                'summary': a.get('summary', ''),
+                'link': a.get('link', '#'),
+                'date': a.get('published_date').isoformat() if a.get('published_date') else '',
+                'source': a.get('Source', ''),
+                'competitors': competitors,
+                'contract_value': safe_float(a.get('contract_value_inr_crore')),
+                'geography': a.get('geography'),
+                'rank_score': a.get('rank_score') or 0,
+            })
+
+        SBU_ALIAS_MAP = {
+            'intl t&d': ['intl t&d', 'international t&d'],
+            'india t&d': ['india t&d'],
+            'civil': ['civil'],
+            'transportation': ['transportation'],
+            'renewables': ['renewables'],
+            'oil & gas': ['oil & gas'],
+        }
+
+        previews = []
+        for u in users:
+            sbu_profile = (u.get('sbu_profile') or '').strip()
+            is_admin = u.get('is_admin', False)
+
+            if is_admin or sbu_profile == 'Admin':
+                sbus = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
+            else:
+                sbus = [s.strip() for s in sbu_profile.split(',') if s.strip()]
+
+            articles_by_sbu = {}
+            for sbu in sbus:
+                aliases = SBU_ALIAS_MAP.get(sbu.lower(), [sbu.lower()])
+                sbu_articles = [
+                    a for a in all_articles
+                    if any(alias in (a.get('sbu_tagging') or '').lower() for alias in aliases)
+                ]
+                if sbu_articles:
+                    articles_by_sbu[sbu] = sbu_articles
+
+            if not articles_by_sbu:
+                continue
+
+            html = build_email_html(u['name'], articles_by_sbu)
+            previews.append({
+                "name": u['name'],
+                "email": u['email'],
+                "sbu_profile": sbu_profile,
+                "subject": f"[KEC Intel] Weekly Competitor Digest — {sbu_profile}",
+                "html": html
+            })
+
+        return {
+            "status": "success",
+            "total": len(previews),
+            "previews": previews
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
