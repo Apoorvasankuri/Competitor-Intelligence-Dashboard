@@ -768,7 +768,7 @@ def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
 
   <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F9F8F3;">
     <tr>
-      <td align="center" style="padding:8px 4px;">
+      <td align="center" style="padding:0;">
 
         <!-- WRAPPER -->
         <table width="800" cellpadding="0" cellspacing="0" border="0" style="max-width:800px;width:100%;">
