@@ -900,21 +900,46 @@ def send_weekly_digest(token: str = ""):
                 # Admin sees all SBUs
                 sbus = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
                 articles_by_sbu = {}
+                SBU_ALIAS_MAP = {
+                    'intl t&d': ['intl t&d', 'international t&d'],
+                    'india t&d': ['india t&d'],
+                    'civil': ['civil'],
+                    'transportation': ['transportation'],
+                    'renewables': ['renewables'],
+                    'oil & gas': ['oil & gas'],
+                }
                 for sbu in sbus:
+                    aliases = SBU_ALIAS_MAP.get(sbu.lower(), [sbu.lower()])
                     sbu_articles = [
                         a for a in all_articles
-                        if sbu.lower() in (a.get('sbu_tagging') or '').lower()
+                        if any(
+                            alias in (a.get('sbu_tagging') or '').lower()
+                            for alias in aliases
+                        )
                     ]
                     if sbu_articles:
                         articles_by_sbu[sbu] = sbu_articles
             else:
-                # Handle comma-separated SBUs e.g. "Intl T&D,Civil"
+                # Map user SBU names to article SBU names
+                SBU_ALIAS_MAP = {
+                    'intl t&d': ['intl t&d', 'international t&d'],
+                    'india t&d': ['india t&d'],
+                    'civil': ['civil'],
+                    'transportation': ['transportation'],
+                    'renewables': ['renewables'],
+                    'oil & gas': ['oil & gas'],
+                }
+
                 sbus = [s.strip() for s in sbu_profile.split(',') if s.strip()]
                 articles_by_sbu = {}
                 for sbu in sbus:
+                    aliases = SBU_ALIAS_MAP.get(sbu.lower(), [sbu.lower()])
                     sbu_articles = [
                         a for a in all_articles
-                        if sbu.lower() in (a.get('sbu_tagging') or '').lower()
+                        if any(
+                            alias in (a.get('sbu_tagging') or '').lower()
+                            for alias in aliases
+                        )
                     ]
                     if sbu_articles:
                         articles_by_sbu[sbu] = sbu_articles
