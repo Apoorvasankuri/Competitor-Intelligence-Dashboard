@@ -1322,8 +1322,9 @@ def get_profile_data(token: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-    # ─── CHATBOT ──────────────────────────────────────────────────────────────────
+
+
+# ─── CHATBOT ──────────────────────────────────────────────────────────────────
 
 import google.generativeai as genai
 
