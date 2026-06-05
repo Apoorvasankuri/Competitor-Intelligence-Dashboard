@@ -1115,7 +1115,10 @@ def get_me(token: str):
 def create_user(req: CreateUserRequest):
     """Create a new user (admin only in production — open for setup now)"""
     try:
-        if req.sbu_profile not in SBU_PROFILES:
+        # Support comma-separated SBUs e.g. "Intl T&D,Civil"
+        selected_sbus = [s.strip() for s in req.sbu_profile.split(',') if s.strip()]
+        invalid = [s for s in selected_sbus if s not in SBU_PROFILES]
+        if not selected_sbus or invalid:
             raise HTTPException(status_code=400, 
                 detail=f"Invalid SBU profile. Must be one of: {SBU_PROFILES}")
 
@@ -1180,6 +1183,12 @@ def update_user(user_id: int, req: CreateUserRequest, token: str):
     if not admin or not admin['is_admin']:
         raise HTTPException(status_code=403, detail="Admin access required")
     try:
+        selected_sbus = [s.strip() for s in req.sbu_profile.split(',') if s.strip()]
+        invalid = [s for s in selected_sbus if s not in SBU_PROFILES]
+        if not selected_sbus or invalid:
+            raise HTTPException(status_code=400, detail=f"Invalid SBU profile. Must be one of: {SBU_PROFILES}")
+
+        conn = get_local_db()  # rest stays the same
         conn = get_local_db()
         cur = conn.cursor()
         cur.execute("""
