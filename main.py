@@ -1443,9 +1443,7 @@ INSTRUCTIONS:
 - If information is from the database, mention the competitor name and date
 - Never make up specific numbers or contract values
 
-{db_context}
-
-
+{db_context}"""
 
         history = []
         for msg in req.conversation_history[-6:]:
@@ -1463,7 +1461,9 @@ INSTRUCTIONS:
                 f"{system_prompt}\n\nUSER QUESTION: {req.message}\n\nProvide a helpful, concise answer with source citations."
             )
         else:
-            response = model.generate_content(system_prompt)
+            response = model.generate_content(
+                f"{system_prompt}\n\nUSER QUESTION: {req.message}\n\nProvide a helpful, concise answer with source citations."
+            )
 
         return {
             "status": "success",
