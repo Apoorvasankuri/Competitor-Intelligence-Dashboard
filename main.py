@@ -69,7 +69,7 @@ def read_root():
 def get_all_data():
     """Get all processed competitor data from the database"""
     try:
-        conn = get_db_connection()  if os.environ.get('DATABASE_URL') else get_local_db()
+        conn = get_db_connection() if os.environ.get('DATABASE_URL') else get_local_db()
         cur = conn.cursor()
         
         query = """
@@ -1424,7 +1424,10 @@ def chat(req: ChatRequest):
                 db_sources.append({"title": title, "link": link, "date": date_str, "type": "database"})
 
         # ── Call Gemini ───────────────────────────────────────────────────────
-        genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
+        api_key = os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+        genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.0-flash')
 
         system_prompt = f"""You are a competitor intelligence assistant for KEC International, a leading EPC company in India.
@@ -1442,20 +1445,23 @@ INSTRUCTIONS:
 
 {db_context}
 
-USER QUESTION: {req.message}
 
-Provide a helpful, concise answer with source citations."""
 
         history = []
         for msg in req.conversation_history[-6:]:
+            role = msg.get("role", "user")
+            if role == "assistant":
+                role = "model"
             history.append({
-                "role": msg.get("role", "user"),
+                "role": role,
                 "parts": [msg.get("content", "")]
             })
 
         if history:
             chat_session = model.start_chat(history=history)
-            response = chat_session.send_message(system_prompt)
+            response = chat_session.send_message(
+                f"{system_prompt}\n\nUSER QUESTION: {req.message}\n\nProvide a helpful, concise answer with source citations."
+            )
         else:
             response = model.generate_content(system_prompt)
 
