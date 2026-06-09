@@ -1435,7 +1435,7 @@ def chat(req: ChatRequest):
         web_sources = []
         try:
             genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
-            search_model = genai.GenerativeModel('gemini-1.5-flash')
+            genai.GenerativeModel('gemini-2.0-flash')
             web_search_prompt = f"Search for recent news about: {req.message} in the context of Indian infrastructure, construction, power transmission, railways, or renewables industry. Provide 3-4 key facts with sources."
             web_response = search_model.generate_content(
                 web_search_prompt,
@@ -1449,7 +1449,7 @@ def chat(req: ChatRequest):
 
         # ── Step 3: Build prompt and call Gemini ──────────────────────────────
         genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        genai.GenerativeModel('gemini-2.0-flash')
 
         system_prompt = f"""You are a competitor intelligence assistant for KEC International, a leading EPC company in India.
 You help the {sbu_profile} business unit track competitor activity.
