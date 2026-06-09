@@ -1357,8 +1357,6 @@ def get_profile_data(token: str):
 
 # ─── CHATBOT ──────────────────────────────────────────────────────────────────
 
-import google.generativeai as genai
-
 class ChatRequest(PydanticBase):
     message: str
     token: str
@@ -1366,9 +1364,7 @@ class ChatRequest(PydanticBase):
 
 @app.post("/api/chat")
 def chat(req: ChatRequest):
-    """Chatbot endpoint — searches DB, web, and uses Gemini for answers"""
     try:
-        # ── Auth ──────────────────────────────────────────────────────────────
         user = get_user_from_token(req.token)
         if not user:
             raise HTTPException(status_code=401, detail="Invalid or expired session")
@@ -1376,12 +1372,9 @@ def chat(req: ChatRequest):
         sbu_profile = user['sbu_profile']
         is_admin = user['is_admin']
 
-        # ── Step 1: Search database ───────────────────────────────────────────
+        # ── Search database ───────────────────────────────────────────────────
         conn = get_db_connection()
         cur = conn.cursor()
-
-        search_terms = req.message.lower().split()
-        search_query = ' | '.join(search_terms)
 
         if is_admin:
             cur.execute("""
@@ -1430,24 +1423,7 @@ def chat(req: ChatRequest):
                 db_context += f"\n[DB Article {i+1}]\nTitle: {title}\nSummary: {summary}\nCategory: {category}\nCompetitor: {competitor}\nDate: {date_str}\nLink: {link}\n"
                 db_sources.append({"title": title, "link": link, "date": date_str, "type": "database"})
 
-        # ── Step 2: Web search via Gemini grounding ───────────────────────────
-        web_context = ""
-        web_sources = []
-        try:
-            genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
-            search_model = genai.GenerativeModel('gemini-2.0-flash')
-            web_search_prompt = f"Search for recent news about: {req.message} in the context of Indian infrastructure, construction, power transmission, railways, or renewables industry. Provide 3-4 key facts with sources."
-            web_response = search_model.generate_content(
-                web_search_prompt,
-                tools=[{"google_search": {}}] if hasattr(genai, 'protos') else []
-            )
-            if web_response.text:
-                web_context = f"\n\nWEB SEARCH RESULTS:\n{web_response.text[:1500]}"
-                web_sources.append({"title": "Web Search Results", "link": "", "type": "web"})
-        except Exception:
-            web_context = ""
-
-        # ── Step 3: Build prompt and call Gemini ──────────────────────────────
+        # ── Call Gemini ───────────────────────────────────────────────────────
         genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
         model = genai.GenerativeModel('gemini-2.0-flash')
 
@@ -1456,9 +1432,8 @@ You help the {sbu_profile} business unit track competitor activity.
 
 INSTRUCTIONS:
 - Answer questions about competitor activity, market trends, order wins, bidding, partnerships, M&A
-- Always cite your sources using [DB], [WEB], or [AI] tags
+- Always cite your sources using [DB] or [AI] tags
 - [DB] = from KEC's internal news database
-- [WEB] = from web search
 - [AI] = from your general knowledge
 - Be concise — 3-5 sentences unless asked for detail
 - Focus on business implications for KEC
@@ -1466,13 +1441,11 @@ INSTRUCTIONS:
 - Never make up specific numbers or contract values
 
 {db_context}
-{web_context}
 
 USER QUESTION: {req.message}
 
 Provide a helpful, concise answer with source citations."""
 
-        # Build conversation history
         history = []
         for msg in req.conversation_history[-6:]:
             history.append({
@@ -1486,29 +1459,16 @@ Provide a helpful, concise answer with source citations."""
         else:
             response = model.generate_content(system_prompt)
 
-        answer = response.text
-
-        # ── Step 4: Return response with sources ──────────────────────────────
-        all_sources = db_sources + web_sources
-        has_db = len(db_sources) > 0
-        has_web = len(web_sources) > 0
-
         return {
             "status": "success",
-            "answer": answer,
-            "sources": all_sources,
-            "source_summary": {
-                "database": len(db_sources),
-                "web": has_web,
-                "ai_knowledge": True
-            }
+            "answer": response.text,
+            "sources": db_sources
         }
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/api/digest-preview")
 def digest_preview(token: str = ""):
     """Get personalized email HTML for each user without sending"""
