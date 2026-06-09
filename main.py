@@ -1428,7 +1428,7 @@ def chat(req: ChatRequest):
         if not api_key:
             raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         system_prompt = f"""You are a competitor intelligence assistant for KEC International, a leading EPC company in India.
 You help the {sbu_profile} business unit track competitor activity.
