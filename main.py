@@ -9,6 +9,7 @@ import os
 from datetime import datetime, date
 from decimal import Decimal
 import math
+import google.generativeai as genai
 
 app = FastAPI(title="Competitor Intelligence API")
 
