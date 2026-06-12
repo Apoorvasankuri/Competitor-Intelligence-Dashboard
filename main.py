@@ -1585,9 +1585,8 @@ def digest_preview(token: str = ""):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-    class CopilotRequest(BaseModel):
+class CopilotRequest(BaseModel):
     question: str
-
 @app.post("/api/copilot-search")
 def copilot_search(req: CopilotRequest):
     """Simple endpoint for Copilot Studio to query the database"""
