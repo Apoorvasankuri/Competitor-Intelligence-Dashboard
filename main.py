@@ -1585,16 +1585,22 @@ def digest_preview(token: str = ""):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
+# ─── COPILOT SEARCH ──────────────────────────────────────────────────────────
+
+from typing import Optional
+
 class CopilotRequest(BaseModel):
-    question: str = ""
-    body: str = ""
-    
-    def get_question(self):
-        return self.question or self.body or ""
+    question: Optional[str] = None
+
 @app.post("/api/copilot-search")
 def copilot_search(req: CopilotRequest):
     """Simple endpoint for Copilot Studio to query the database"""
     try:
+        question = req.question or ""
+
+        if not question:
+            return {"found": False, "message": "No question provided.", "articles": []}
+
         conn = get_db_connection()
         cur = conn.cursor()
 
@@ -1608,18 +1614,14 @@ def copilot_search(req: CopilotRequest):
                 @@ plainto_tsquery('english', %s)
             ORDER BY published_date DESC
             LIMIT 5
-        """, (req.get_question(),))
+        """, (question,))
 
         results = cur.fetchall()
         cur.close()
         conn.close()
 
         if not results:
-            return {
-                "found": False,
-                "message": "No relevant articles found in the database.",
-                "articles": []
-            }
+            return {"found": False, "message": "No relevant articles found.", "articles": []}
 
         articles = []
         for row in results:
@@ -1631,14 +1633,11 @@ def copilot_search(req: CopilotRequest):
                 "sbu": row.get("sbu_tagging", ""),
                 "date": row.get("published_date").isoformat() if row.get("published_date") else "",
                 "link": row.get("link", ""),
-                "contract_value_crore": row.get("contract_value_inr_crore")
+                "contract_value_crore": safe_float(row.get("contract_value_inr_crore"))
             })
 
-        return {
-            "found": True,
-            "count": len(articles),
-            "articles": articles
-        }
+        return {"found": True, "count": len(articles), "articles": articles}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
