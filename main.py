@@ -10,6 +10,7 @@ from datetime import datetime, date
 from decimal import Decimal
 import math
 import google.generativeai as genai
+from fastapi import FastAPI, HTTPException, Request
 
 app = FastAPI(title="Competitor Intelligence API")
 
