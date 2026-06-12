@@ -1586,7 +1586,11 @@ def digest_preview(token: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
     
 class CopilotRequest(BaseModel):
-    question: str
+    question: str = ""
+    body: str = ""
+    
+    def get_question(self):
+        return self.question or self.body or ""
 @app.post("/api/copilot-search")
 def copilot_search(req: CopilotRequest):
     """Simple endpoint for Copilot Studio to query the database"""
@@ -1604,7 +1608,7 @@ def copilot_search(req: CopilotRequest):
                 @@ plainto_tsquery('english', %s)
             ORDER BY published_date DESC
             LIMIT 5
-        """, (req.question,))
+        """, (req.get_question(),))
 
         results = cur.fetchall()
         cur.close()
