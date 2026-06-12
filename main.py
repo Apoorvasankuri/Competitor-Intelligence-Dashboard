@@ -1585,4 +1585,57 @@ def digest_preview(token: str = ""):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-    
+    class CopilotRequest(BaseModel):
+    question: str
+
+@app.post("/api/copilot-search")
+def copilot_search(req: CopilotRequest):
+    """Simple endpoint for Copilot Studio to query the database"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT news_title, summary, category_tag, sbu_tagging,
+                   competitor_tagging, published_date, link,
+                   contract_value_inr_crore, geography
+            FROM processed_articles
+            WHERE to_tsvector('english', 
+                COALESCE(news_title,'') || ' ' || COALESCE(summary,''))
+                @@ plainto_tsquery('english', %s)
+            ORDER BY published_date DESC
+            LIMIT 5
+        """, (req.question,))
+
+        results = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not results:
+            return {
+                "found": False,
+                "message": "No relevant articles found in the database.",
+                "articles": []
+            }
+
+        articles = []
+        for row in results:
+            articles.append({
+                "title": row.get("news_title", ""),
+                "summary": row.get("summary", ""),
+                "competitor": row.get("competitor_tagging", ""),
+                "category": row.get("category_tag", ""),
+                "sbu": row.get("sbu_tagging", ""),
+                "date": row.get("published_date").isoformat() if row.get("published_date") else "",
+                "link": row.get("link", ""),
+                "contract_value_crore": row.get("contract_value_inr_crore")
+            })
+
+        return {
+            "found": True,
+            "count": len(articles),
+            "articles": articles
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
