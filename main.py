@@ -1593,51 +1593,16 @@ class CopilotRequest(BaseModel):
     question: Optional[str] = None
 
 @app.post("/api/copilot-search")
-def copilot_search(req: CopilotRequest):
-    """Simple endpoint for Copilot Studio to query the database"""
-    try:
-        question = req.question or ""
-
-        if not question:
-            return {"found": False, "message": "No question provided.", "articles": []}
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT news_title, summary, category_tag, sbu_tagging,
-                   competitor_tagging, published_date, link,
-                   contract_value_inr_crore, geography
-            FROM processed_articles
-            WHERE to_tsvector('english', 
-                COALESCE(news_title,'') || ' ' || COALESCE(summary,''))
-                @@ plainto_tsquery('english', %s)
-            ORDER BY published_date DESC
-            LIMIT 5
-        """, (question,))
-
-        results = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        if not results:
-            return {"found": False, "message": "No relevant articles found.", "articles": []}
-
-        articles = []
-        for row in results:
-            articles.append({
-                "title": row.get("news_title", ""),
-                "summary": row.get("summary", ""),
-                "competitor": row.get("competitor_tagging", ""),
-                "category": row.get("category_tag", ""),
-                "sbu": row.get("sbu_tagging", ""),
-                "date": row.get("published_date").isoformat() if row.get("published_date") else "",
-                "link": row.get("link", ""),
-                "contract_value_crore": safe_float(row.get("contract_value_inr_crore"))
-            })
-
-        return {"found": True, "count": len(articles), "articles": articles}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def copilot_search(request: Request):
+    body = await request.body()
+    content_type = request.headers.get("content-type", "none")
+    body_str = body.decode("utf-8", errors="ignore")
     
+    # Log everything to Render logs
+    print(f"=== COPILOT REQUEST ===", flush=True)
+    print(f"CONTENT-TYPE: {content_type}", flush=True)
+    print(f"RAW BODY: {body_str}", flush=True)
+    print(f"======================", flush=True)
+    
+    # Return 200 no matter what so we can see the logs
+    return {"found": False, "message": "debug mode", "articles": []}    
