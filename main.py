@@ -1365,7 +1365,7 @@ class ChatRequest(PydanticBase):
     token: str
     conversation_history: list = []
 
-    @app.post("/api/chat")
+@app.post("/api/chat")
 def chat(req: ChatRequest):
     try:
         user = get_user_from_token(req.token)
