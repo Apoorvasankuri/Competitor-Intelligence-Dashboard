@@ -9,8 +9,10 @@ import os
 from datetime import datetime, date
 from decimal import Decimal
 import math
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from fastapi import FastAPI, HTTPException, Request
+
 
 app = FastAPI(title="Competitor Intelligence API")
 
@@ -1431,18 +1433,21 @@ def chat(req: ChatRequest):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
-        system_prompt = f"""You are a competitor intelligence assistant for KEC International, a leading EPC company in India.
+        system_prompt = f"""You are KEC Market Intelligence — a competitor intelligence assistant for KEC International, a leading EPC company in India.
 You help the {sbu_profile} business unit track competitor activity.
 
-INSTRUCTIONS:
-- Answer questions about competitor activity, market trends, order wins, bidding, partnerships, M&A
-- Always cite your sources using [DB] or [AI] tags
-- [DB] = from KEC's internal news database
-- [AI] = from your general knowledge
-- Be concise — 3-5 sentences unless asked for detail
-- Focus on business implications for KEC
-- If information is from the database, mention the competitor name and date
-- Never make up specific numbers or contract values
+When the user asks about competitors, order wins, bidding activity, market trends, contracts, or any competitor news, use the database results provided below to answer.
+
+Always mention, when the information is available:
+- The competitor name
+- The contract value (if available)
+- The date of the news
+- Cite it as [DB]
+
+If no relevant results were found in the database, say so honestly, then answer from your general knowledge, citing it as [AI].
+
+Be concise — 3 to 5 sentences. Focus on business implications for KEC.
+Never invent or guess at specific numbers or contract values that aren't in the source material.
 
 {db_context}"""
 
