@@ -1365,7 +1365,7 @@ class ChatRequest(PydanticBase):
     token: str
     conversation_history: list = []
 
-@app.post("/api/chat")
+    @app.post("/api/chat")
 def chat(req: ChatRequest):
     try:
         user = get_user_from_token(req.token)
@@ -1426,12 +1426,12 @@ def chat(req: ChatRequest):
                 db_context += f"\n[DB Article {i+1}]\nTitle: {title}\nSummary: {summary}\nCategory: {category}\nCompetitor: {competitor}\nDate: {date_str}\nLink: {link}\n"
                 db_sources.append({"title": title, "link": link, "date": date_str, "type": "database"})
 
-        # ── Call Gemini ───────────────────────────────────────────────────────
+        # ── Call Gemini (new SDK, with Google Search fallback) ─────────────────
         api_key = os.environ.get('GEMINI_API_KEY')
         if not api_key:
             raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        client = genai.Client(api_key=api_key)
 
         system_prompt = f"""You are KEC Market Intelligence — a competitor intelligence assistant for KEC International, a leading EPC company in India.
 You help the {sbu_profile} business unit track competitor activity.
@@ -1451,36 +1451,65 @@ Never invent or guess at specific numbers or contract values that aren't in the 
 
 {db_context}"""
 
-        history = []
+        contents = []
         for msg in req.conversation_history[-6:]:
             role = msg.get("role", "user")
             if role == "assistant":
                 role = "model"
-            history.append({
-                "role": role,
-                "parts": [msg.get("content", "")]
-            })
+            contents.append(
+                types.Content(role=role, parts=[types.Part(text=msg.get("content", ""))])
+            )
+        contents.append(
+            types.Content(role="user", parts=[types.Part(text=req.message)])
+        )
 
-        if history:
-            chat_session = model.start_chat(history=history)
-            response = chat_session.send_message(
-                f"{system_prompt}\n\nUSER QUESTION: {req.message}\n\nProvide a helpful, concise answer with source citations."
-            )
-        else:
-            response = model.generate_content(
-                f"{system_prompt}\n\nUSER QUESTION: {req.message}\n\nProvide a helpful, concise answer with source citations."
-            )
+        used_search = False
+        tools = None
+        if not db_results:
+            tools = [types.Tool(google_search=types.GoogleSearch())]
+            used_search = True
+
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            tools=tools,
+            temperature=0.3,
+            max_output_tokens=1200,
+        )
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=config,
+        )
+
+        sources = list(db_sources)
+        try:
+            candidate = response.candidates[0]
+            if used_search and candidate.grounding_metadata and candidate.grounding_metadata.grounding_chunks:
+                for chunk in candidate.grounding_metadata.grounding_chunks:
+                    if chunk.web:
+                        sources.append({
+                            "title": chunk.web.title,
+                            "link": chunk.web.uri,
+                            "date": "",
+                            "type": "web"
+                        })
+        except Exception:
+            pass
 
         return {
             "status": "success",
             "answer": response.text,
-            "sources": db_sources
+            "sources": sources,
+            "used_web_search": used_search
         }
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/digest-preview")
 def digest_preview(token: str = ""):
     """Get personalized email HTML for each user without sending"""
@@ -1490,7 +1519,6 @@ def digest_preview(token: str = ""):
             if not user or not user['is_admin']:
                 raise HTTPException(status_code=403, detail="Admin access required")
 
-        # Get all active users
         local_conn = get_local_db()
         local_cur = local_conn.cursor(cursor_factory=RealDictCursor)
         local_cur.execute("""
@@ -1501,7 +1529,6 @@ def digest_preview(token: str = ""):
         local_cur.close()
         local_conn.close()
 
-        # Get this week's articles
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -1517,7 +1544,6 @@ def digest_preview(token: str = ""):
         cur.close()
         conn.close()
 
-        # Normalize articles
         all_articles = []
         for a in raw_articles:
             competitors = [
@@ -1590,7 +1616,8 @@ def digest_preview(token: str = ""):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 # ─── COPILOT SEARCH ──────────────────────────────────────────────────────────
 
 from typing import Optional
@@ -1658,4 +1685,4 @@ async def copilot_search(request: Request):
         return {"found": True, "count": len(articles), "articles": articles}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
