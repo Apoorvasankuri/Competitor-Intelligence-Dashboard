@@ -1521,7 +1521,7 @@ Always mention, when the information is available:
 - The competitor name
 - The contract value (if available)
 - The date of the news
-- Cite it as [DB]
+- At the very end of your response, add [DB] on a new line — do not repeat any content after it
 
 If no relevant results were found in the database, say so honestly, then answer from your general knowledge, citing it as [AI].
 
