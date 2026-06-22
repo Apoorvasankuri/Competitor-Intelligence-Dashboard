@@ -1684,5 +1684,5 @@ async def copilot_search(request: Request):
 
         return {"found": True, "count": len(articles), "articles": articles}
 
-    # except Exception as e:
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
