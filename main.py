@@ -1552,7 +1552,7 @@ Never invent or guess at specific numbers or contract values that aren't in the 
             max_output_tokens=1200,
         )
 
-        models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3-flash", "gemini-3.5-flash"]
+        models_to_try = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.5-flash"]
         last_error = None
         for model_name in models_to_try:
             try:
