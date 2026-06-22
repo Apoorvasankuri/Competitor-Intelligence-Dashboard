@@ -1523,7 +1523,7 @@ Always mention, when the information is available:
 - The date of the news
 - At the very end of your response, add [DB] on a new line — do not repeat any content after it
 
-If no relevant results were found in the database, say so honestly, then answer from your general knowledge, citing it as [AI].
+If the database articles don't contain the specific answer, supplement using your general knowledge or web search and cite that part as [AI]. Always try to give a useful answer — never just say "not available" without attempting to answer from general knowledge.
 
 Be concise — 3 to 5 sentences. Focus on business implications for KEC.
 Never invent or guess at specific numbers or contract values that aren't in the source material.
@@ -1542,11 +1542,8 @@ Never invent or guess at specific numbers or contract values that aren't in the 
             types.Content(role="user", parts=[types.Part(text=req.message)])
         )
 
-        used_search = False
-        tools = None
-        if not db_results:
-            tools = [types.Tool(google_search=types.GoogleSearch())]
-            used_search = True
+        used_search = True
+        tools = [types.Tool(google_search=types.GoogleSearch())]
 
         config = types.GenerateContentConfig(
             system_instruction=system_prompt,
