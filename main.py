@@ -1476,12 +1476,23 @@ Never invent or guess at specific numbers or contract values that aren't in the 
             max_output_tokens=1200,
         )
 
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=config,
-        )
-
+        models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
+        last_error = None
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                )
+                break
+            except Exception as e:
+                last_error = e
+                if '503' in str(e) or 'UNAVAILABLE' in str(e):
+                    continue
+                raise
+        else:
+            raise last_error
         sources = list(db_sources)
         try:
             candidate = response.candidates[0]
