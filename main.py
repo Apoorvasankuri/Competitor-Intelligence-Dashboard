@@ -1357,6 +1357,61 @@ def get_profile_data(token: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def preprocess_chat_query(message: str):
+    """Extract search keywords, category filter, and date filter from natural language."""
+    msg = message.lower().strip()
+
+    # Detect time references
+    days = None
+    time_patterns = {
+        'today': 1, 'yesterday': 2,
+        'this week': 7, 'past week': 7, 'last week': 14,
+        'this month': 30, 'past month': 30, 'last month': 60,
+        'this quarter': 90, 'last quarter': 180,
+        'recent': 7, 'latest': 7, 'last few days': 5,
+    }
+    for phrase, d in time_patterns.items():
+        if phrase in msg:
+            days = d
+            msg = msg.replace(phrase, '').strip()
+            break
+
+    # Detect category references
+    category = None
+    category_map = {
+        'bidding activity': 'bidding activity', 'bidding': 'bidding activity',
+        'bids': 'bidding activity', 'bid': 'bidding activity',
+        'order wins': 'order wins', 'order win': 'order wins',
+        'wins': 'order wins', 'won': 'order wins', 'bags': 'order wins', 'awarded': 'order wins',
+        'merger': 'mergers & acquisitions', 'acquisition': 'mergers & acquisitions', 'm&a': 'mergers & acquisitions',
+        'partnership': 'partnerships & alliances', 'alliance': 'partnerships & alliances',
+        'jv': 'partnerships & alliances', 'joint venture': 'partnerships & alliances',
+        'financial': 'financial', 'results': 'financial', 'revenue': 'financial',
+        'quarterly': 'financial', 'profit': 'financial',
+        'project execution': 'project execution', 'execution': 'project execution',
+        'commissioned': 'project execution', 'completed': 'project execution',
+        'stock': 'stock market', 'share price': 'stock market',
+        'regulation': 'regulatory & policy', 'policy': 'regulatory & policy',
+        'industry': 'industry trends', 'trend': 'industry trends',
+    }
+    for phrase, cat in sorted(category_map.items(), key=lambda x: -len(x[0])):
+        if phrase in msg:
+            category = cat
+            break
+
+    # Remove filler words from keywords
+    filler = {'what', 'are', 'the', 'is', 'any', 'show', 'me', 'tell', 'about',
+              'find', 'get', 'give', 'list', 'all', 'of', 'for', 'in', 'by',
+              'from', 'to', 'a', 'an', 'do', 'does', 'has', 'have', 'been',
+              'their', 'there', 'how', 'much', 'many', 'can', 'you', 'please',
+              'among', 'amongst', 'between', 'with', 'did', 'was', 'were'}
+    words = [w for w in msg.split() if w not in filler and len(w) > 2]
+    keywords = ' '.join(words).strip()
+
+    if not keywords and category:
+        keywords = category
+
+    return {"keywords": keywords, "category": category, "days": days}
 
 # ─── CHATBOT ──────────────────────────────────────────────────────────────────
 
