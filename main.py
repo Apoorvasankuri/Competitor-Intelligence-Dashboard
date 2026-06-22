@@ -1375,37 +1375,61 @@ def chat(req: ChatRequest):
         sbu_profile = user['sbu_profile']
         is_admin = user['is_admin']
 
-        # ── Search database ───────────────────────────────────────────────────
+        # ── Smart database search ─────────────────────────────────────────────
+        parsed = preprocess_chat_query(req.message)
+        search_keywords = parsed["keywords"]
+        search_category = parsed["category"]
+        search_days = parsed["days"]
+
         conn = get_db_connection()
         cur = conn.cursor()
 
-        if is_admin:
-            cur.execute("""
-                SELECT news_title, summary, category_tag, sbu_tagging,
-                       competitor_tagging, published_date, link, geography,
-                       contract_value_inr_crore
-                FROM processed_articles
-                WHERE to_tsvector('english', COALESCE(news_title,'') || ' ' || COALESCE(summary,''))
-                      @@ plainto_tsquery('english', %s)
-                ORDER BY published_date DESC
-                LIMIT 8
-            """, (req.message,))
-        else:
-            sbus = [s.strip() for s in sbu_profile.split(',') if s.strip()]
-            conditions = " OR ".join(["sbu_tagging ILIKE %s" for _ in sbus])
-            sbu_params = [f"%{sbu}%" for sbu in sbus]
-            cur.execute("""
-                SELECT news_title, summary, category_tag, sbu_tagging,
-                       competitor_tagging, published_date, link, geography,
-                       contract_value_inr_crore
-                FROM processed_articles
-                WHERE (""" + conditions + """)
-                AND to_tsvector('english', COALESCE(news_title,'') || ' ' || COALESCE(summary,''))
-                    @@ plainto_tsquery('english', %s)
-                ORDER BY published_date DESC
-                LIMIT 8
-            """, sbu_params + [req.message])
+        # Build dynamic WHERE clauses
+        where_clauses = []
+        params = []
 
+        # SBU filter (non-admin only)
+        if not is_admin:
+            sbus = [s.strip() for s in sbu_profile.split(',') if s.strip()]
+            sbu_conditions = " OR ".join(["sbu_tagging ILIKE %s" for _ in sbus])
+            where_clauses.append(f"({sbu_conditions})")
+            params.extend([f"%{sbu}%" for sbu in sbus])
+
+        # Category filter (if detected)
+        if search_category:
+            where_clauses.append("category_tag ILIKE %s")
+            params.append(f"%{search_category}%")
+
+        # Date filter (if detected)
+        if search_days:
+            where_clauses.append("published_date >= CURRENT_DATE - INTERVAL '%s days'")
+            params.append(search_days)
+
+        # Full-text keyword search (if we have meaningful keywords beyond category)
+        if search_keywords and search_keywords != search_category:
+            where_clauses.append("""
+                to_tsvector('english', COALESCE(news_title,'') || ' ' || COALESCE(summary,''))
+                @@ plainto_tsquery('english', %s)
+            """)
+            params.append(search_keywords)
+
+        # Combine — if no filters at all, fall back to recent articles
+        if where_clauses:
+            where_sql = " AND ".join(where_clauses)
+        else:
+            where_sql = "published_date >= CURRENT_DATE - INTERVAL '7 days'"
+
+        query = f"""
+            SELECT news_title, summary, category_tag, sbu_tagging,
+                   competitor_tagging, published_date, link, geography,
+                   contract_value_inr_crore
+            FROM processed_articles
+            WHERE {where_sql}
+            ORDER BY rank_score DESC NULLS LAST, published_date DESC
+            LIMIT 8
+        """
+
+        cur.execute(query, params)
         db_results = cur.fetchall()
         cur.close()
         conn.close()
