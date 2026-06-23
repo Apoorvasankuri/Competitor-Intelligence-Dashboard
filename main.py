@@ -784,7 +784,13 @@ def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
               <p style="margin:8px 0 0 0;font-size:12px;color:#C9A84C;letter-spacing:3px;font-family:Arial,sans-serif;">WEEKLY ACTION DIGEST</p>
             </td>
           </tr>
-
+          <!-- BANNER IMAGE -->
+          <tr>
+            <td style="padding:0;line-height:0;">
+              <img src="cid:digest_banner@kec" alt="KEC Intel Banner" width="800"
+                   style="display:block;width:100%;max-width:800px;border:0;" />
+            </td>
+          </tr> 
           <!-- BODY -->
           <tr>
             <td style="background:#FFFFFF;padding:32px;">
@@ -837,6 +843,10 @@ def send_weekly_digest(token: str = ""):
 
         resend.api_key = os.environ.get('RESEND_API_KEY')
         from_email = os.environ.get('RESEND_FROM', 'onboarding@resend.dev')
+        import base64
+        banner_path = os.path.join(os.path.dirname(__file__), 'assets', 'banner.jpg')
+        with open(banner_path, 'rb') as f:
+            banner_b64 = base64.b64encode(f.read()).decode('utf-8')
 
         # ── Step 1: Get all active users ──────────────────────────────────────
         local_conn = get_local_db()
@@ -962,6 +972,14 @@ def send_weekly_digest(token: str = ""):
                     "to": [to_email],
                     "subject": f"[KEC Intel] Weekly Competitor Digest — {sbu_profile}",
                     "html": html,
+                    "attachments": [
+                        {
+                            "filename": "banner.jpg",
+                            "content": banner_b64,
+                            "content_type": "image/jpeg",
+                            "content_id": "digest_banner@kec",
+                        }
+                    ],
                 })
                 sent.append(u['email'])
                 log_cur.execute("""
