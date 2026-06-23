@@ -785,12 +785,12 @@ def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
             </td>
           </tr>
           <!-- BANNER IMAGE -->
-          <tr>
+          <!-- <tr>
             <td style="padding:0;line-height:0;">
               <img src="cid:digest_banner@kec" alt="KEC Intel Banner" width="800"
                    style="display:block;width:100%;max-width:800px;border:0;" />
             </td>
-          </tr> 
+          </tr> --> 
           <!-- BODY -->
           <tr>
             <td style="background:#FFFFFF;padding:32px;">
