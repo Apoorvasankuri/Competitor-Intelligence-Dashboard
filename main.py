@@ -13,6 +13,10 @@ from google import genai
 from google.genai import types
 from fastapi import FastAPI, HTTPException, Request
 
+# Users who receive AI-generated BU summary digest instead of article digest
+SUMMARY_DIGEST_EMAILS = {'kejriwalv@kecrpg.com', 'barfiwalav@kecrpg.com'}
+ALL_SBUS = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
+
 
 app = FastAPI(title="Competitor Intelligence API")
 
@@ -831,6 +835,156 @@ def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
 </body>
 </html>"""
     
+def generate_bu_summary(sbu: str, articles: list) -> str:
+    """Generate a single AI paragraph summarising the week's competitor activity for one BU"""
+    if not articles:
+        return f"No significant competitor activity recorded in the {sbu} segment this week."
+
+    # Build article context
+    article_text = ""
+    for i, a in enumerate(articles[:15]):  # cap at 15 articles per BU
+        competitors = ', '.join(a.get('competitors', [])) or 'Unknown'
+        article_text += (
+            f"\n[{i+1}] Category: {a.get('category', '')} | "
+            f"Competitor: {competitors} | "
+            f"Date: {a.get('date', '')} | "
+            f"Summary: {a.get('summary', a.get('title', ''))}"
+        )
+
+    prompt = f"""You are a senior competitive intelligence analyst for KEC International, a leading EPC company.
+
+Write a single executive-level paragraph (5-7 sentences) summarising this week's competitor activity in KEC's {sbu} business unit.
+
+Cover the most important developments across all categories — order wins, bidding activity, M&A, partnerships, financial results. Mention specific competitor names and contract values where available. End with one sentence on the strategic implication for KEC.
+
+Write in third person, past tense. Be specific and concise. No filler phrases.
+
+This week's intelligence articles for {sbu}:
+{article_text}
+
+Return only the paragraph, no heading, no bullet points."""
+
+    try:
+        api_key = os.environ.get('GEMINI_API_KEY')
+        if not api_key:
+            return f"AI summary unavailable for {sbu} this week."
+
+        client = genai.Client(api_key=api_key)
+
+        models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
+        last_error = None
+        for model_name in models_to_try:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[types.Content(
+                        role="user",
+                        parts=[types.Part(text=prompt)]
+                    )],
+                    config=types.GenerateContentConfig(
+                        temperature=0.4,
+                        max_output_tokens=300,
+                    )
+                )
+                return response.text.strip()
+            except Exception as e:
+                last_error = e
+                if '503' in str(e) or 'UNAVAILABLE' in str(e):
+                    continue
+                raise
+        raise last_error
+
+    except Exception as e:
+        logging.error(f"BU summary generation failed for {sbu}: {e}")
+        return f"AI summary unavailable for {sbu} this week."
+
+
+def build_summary_digest_html(recipient_name: str, all_articles: list, sbu_alias_map: dict) -> str:
+    """Build the executive AI-summary email for senior leadership"""
+
+    sbu_sections = ''
+    for sbu in ALL_SBUS:
+        aliases = sbu_alias_map.get(sbu.lower(), [sbu.lower()])
+        sbu_articles = [
+            a for a in all_articles
+            if any(alias in (a.get('sbu_tagging') or '').lower() for alias in aliases)
+        ]
+
+        summary_text = generate_bu_summary(sbu, sbu_articles)
+        article_count = len(sbu_articles)
+
+        sbu_sections += f"""
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+          <tr>
+            <td style="background:#1A3D6D;padding:12px 20px;border-radius:6px 6px 0 0;">
+              <p style="margin:0;font-size:12px;font-weight:bold;color:#C9A84C;letter-spacing:2px;text-transform:uppercase;font-family:Arial,sans-serif;">{sbu}</p>
+              <p style="margin:4px 0 0;font-size:11px;color:rgba(255,255,255,0.45);font-family:Arial,sans-serif;">{article_count} article{"s" if article_count != 1 else ""} this week</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#FFFFFF;padding:20px 24px;border:1px solid #E5E2D0;border-top:none;border-radius:0 0 6px 6px;">
+              <p style="margin:0;font-size:14px;color:#333333;line-height:1.8;font-family:Arial,sans-serif;">{summary_text}</p>
+            </td>
+          </tr>
+        </table>"""
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#F9F8F3;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F9F8F3;">
+    <tr>
+      <td align="center" style="padding:0;">
+        <table width="800" cellpadding="0" cellspacing="0" border="0" style="max-width:800px;width:100%;">
+
+          <!-- HEADER -->
+          <tr>
+            <td style="background:#0F2B4C;padding:32px;text-align:center;">
+              <h1 style="margin:0;font-size:24px;color:#FFFFFF;font-family:Georgia,serif;font-weight:bold;">Competitor Intelligence</h1>
+              <p style="margin:8px 0 0;font-size:12px;color:#C9A84C;letter-spacing:3px;font-family:Arial,sans-serif;">WEEKLY EXECUTIVE BRIEF</p>
+            </td>
+          </tr>
+
+          <!-- BODY -->
+          <tr>
+            <td style="background:#FFFFFF;padding:32px;">
+              <p style="margin:0 0 6px;font-size:15px;color:#333333;font-family:Arial,sans-serif;">Hi <strong>{recipient_name}</strong>,</p>
+              <p style="margin:0 0 28px;font-size:14px;color:#666666;line-height:1.6;font-family:Arial,sans-serif;">
+                Here is your weekly executive summary of competitor activity across all six business units.
+                Each section reflects the most significant developments from this week's intelligence database.
+              </p>
+
+              {sbu_sections}
+
+              <!-- FOOTER NOTE -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-left:4px solid #C9A84C;background:#F9F8F3;margin-top:8px;">
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <p style="margin:0;font-size:13px;color:#666666;font-family:Arial,sans-serif;">
+                      Log in to the <a href="https://competitor-intelligence-dashboard-u.vercel.app/index.html" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">KEC Intel Platform</a> for the full article breakdown.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td style="background:#0F2B4C;padding:16px;text-align:center;">
+              <p style="margin:0;font-size:12px;color:rgba(255,255,255,0.4);font-family:Arial,sans-serif;">KEC Competitor Intelligence Platform · Weekly Executive Brief</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
 
 @app.post("/api/send-digest")
 def send_weekly_digest(token: str = ""):
@@ -958,20 +1112,28 @@ def send_weekly_digest(token: str = ""):
                     if sbu_articles:
                         articles_by_sbu[sbu] = sbu_articles
 
-            if not articles_by_sbu:
+            if not articles_by_sbu and u['email'].lower() not in SUMMARY_DIGEST_EMAILS:
                 skipped.append(u['email'])
                 continue
 
             try:
-                html = build_email_html(u['name'], articles_by_sbu)
+                # Senior leadership get AI-generated BU summary digest
+                if u['email'].lower() in SUMMARY_DIGEST_EMAILS:
+                    logging.info(f"   📋 Generating executive summary digest for {u['email']}...")
+                    html = build_summary_digest_html(u['name'], all_articles, SBU_ALIAS_MAP)
+                    subject = f"[KEC Intel] Weekly Executive Brief — All SBUs"
+                else:
+                    html = build_email_html(u['name'], articles_by_sbu)
+                    subject = f"[KEC Intel] Weekly Competitor Digest — {sbu_profile}"
                 to_email = os.environ.get('TEST_EMAIL', u['email']) \
                     if os.environ.get('TEST_MODE') == 'true' else u['email']
 
                 resend.Emails.send({
                     "from": from_email,
                     "to": [to_email],
-                    "subject": f"[KEC Intel] Weekly Competitor Digest — {sbu_profile}",
+                    "subject": subject,
                     "html": html,
+                
                     "attachments": [
                         {
                             "filename": "banner.jpg",
