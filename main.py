@@ -12,6 +12,7 @@ import math
 from google import genai
 from google.genai import types
 from fastapi import FastAPI, HTTPException, Request
+import logging
 
 # Users who receive AI-generated BU summary digest instead of article digest
 SUMMARY_DIGEST_EMAILS = {'kejriwalv@kecrpg.com', 'barfiwalav@kecrpg.com'}
@@ -998,9 +999,13 @@ def send_weekly_digest(token: str = ""):
         resend.api_key = os.environ.get('RESEND_API_KEY')
         from_email = os.environ.get('RESEND_FROM', 'onboarding@resend.dev')
         import base64
-        banner_path = os.path.join(os.path.dirname(__file__), 'assets', 'banner.jpg')
-        with open(banner_path, 'rb') as f:
-            banner_b64 = base64.b64encode(f.read()).decode('utf-8')
+        banner_b64 = None
+        try:
+            banner_path = os.path.join(os.path.dirname(__file__), 'assets', 'banner.jpg')
+            with open(banner_path, 'rb') as f:
+                banner_b64 = base64.b64encode(f.read()).decode('utf-8')
+        except Exception:
+            pass
 
         # ── Step 1: Get all active users ──────────────────────────────────────
         local_conn = get_local_db()
@@ -1133,15 +1138,7 @@ def send_weekly_digest(token: str = ""):
                     "to": [to_email],
                     "subject": subject,
                     "html": html,
-                
-                    "attachments": [
-                        {
-                            "filename": "banner.jpg",
-                            "content": banner_b64,
-                            "content_type": "image/jpeg",
-                            "content_id": "digest_banner@kec",
-                        }
-                    ],
+                    **({"attachments": [{"filename": "banner.jpg", "content": banner_b64, "content_type": "image/jpeg", "content_id": "digest_banner@kec"}]} if banner_b64 else {})
                 })
                 sent.append(u['email'])
                 log_cur.execute("""
@@ -1637,7 +1634,7 @@ def chat(req: ChatRequest):
 
         # Date filter (if detected)
         if search_days:
-            where_clauses.append("published_date >= CURRENT_DATE - INTERVAL '%s days'")
+            where_clauses.append("published_date >= CURRENT_DATE - (%s * INTERVAL '1 day')")
             params.append(search_days)
 
         # Full-text keyword search (if we have meaningful keywords beyond category)
