@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 import logging
 
 # Users who receive AI-generated BU summary digest instead of article digest
-SUMMARY_DIGEST_EMAILS = {'kejriwalv@kecrpg.com', 'barfiwalav@kecrpg.com'}
+SUMMARY_DIGEST_EMAILS = {' saxenaa01@kecrpg.com'}
 ALL_SBUS = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
 
 
