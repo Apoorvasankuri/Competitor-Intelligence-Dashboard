@@ -852,22 +852,22 @@ def generate_bu_summary(sbu: str, articles: list) -> str:
         )
 
     
-    prompt = f"""You are a senior strategy analyst briefing the Managing Director of KEC International, a ₹25,000 Cr EPC company.
+    prompt = f"""You are a competitive intelligence analyst at KEC International.
 
-Write a single executive paragraph (5-6 sentences) on competitor activity in KEC's {sbu} business unit this week.
+Summarise this week's competitor activity for the {sbu} business unit as a set of bullet points.
 
 Rules:
-- Open with the single most important development — largest order, key competitor win, or major market move. Name the competitor and deal specifically.
-- Include contract value in ₹ Cr wherever available.
-- Cover 2-3 distinct developments across different competitors if present.
-- End with one sentence on what this means for KEC — threat, opportunity, or watch point.
-- Tone: crisp, factual, boardroom-ready. No filler phrases like "this week saw" or "it is noteworthy".
-- No bullet points. No headings. One paragraph only.
+- Each bullet = one distinct news item. One sentence per bullet, complete and untruncated.
+- Format: "• [Competitor] [what they did] — ₹X Cr / [geography] (if available)."
+- Include contract value and geography wherever available in the data.
+- No strategic commentary. No "this poses a threat to KEC". Just the facts.
+- Cover every distinct development in the articles — do not skip any.
+- Never cut a sentence short. Every bullet must be a complete statement.
 
 Intelligence articles for {sbu} this week:
 {article_text}
 
-Write the paragraph now:"""
+Write the bullet points now:"""
 
     try:
         api_key = os.environ.get('GEMINI_API_KEY')
