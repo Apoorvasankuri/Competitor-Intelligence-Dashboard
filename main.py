@@ -18,7 +18,6 @@ import logging
 SUMMARY_DIGEST_EMAILS = {'emmadis@kecrpg.com','sankuria@kecrpg.com'}
 ALL_SBUS = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
 
-
 app = FastAPI(title="Competitor Intelligence API")
 
 # CORS middleware
@@ -852,17 +851,53 @@ def generate_bu_summary(sbu: str, articles: list) -> str:
             f"Summary: {a.get('summary', a.get('title', ''))}"
         )
 
-    prompt = f"""You are a senior competitive intelligence analyst for KEC International, a leading EPC company.
+    prompt = f"""async def generate_sbu_brief(client, model_name, sbu_name, articles):
+    """Generate one executive paragraph for a single SBU."""
+    
+    if not articles:
+        return f"<p>No significant competitor activity recorded for {sbu_name} this week.</p>"
+    
+    # Build article context
+    article_context = ""
+    for i, a in enumerate(articles[:15], 1):  # cap at 15 per SBU
+        article_context += f"""
+Article {i}:
+- Title: {a.get('news_title', '')}
+- Competitor: {a.get('competitor_tagging', '')}
+- Category: {a.get('category_tag', '')}
+- Summary: {a.get('summary', '')}
+- Contract Value: {a.get('contract_value_inr_crore', 'Not specified')} Cr
+- Geography: {a.get('geography', '')}
+- Date: {a.get('published_date', '')}
+"""
 
-Write a single executive-level paragraph (5-7 sentences) summarising this week's competitor activity in KEC's {sbu} business unit.
+    prompt = f"""You are a senior strategy analyst briefing the Managing Director of KEC International, 
+a ₹25,000 Cr EPC company. Write an executive intelligence brief for the {sbu_name} business unit.
 
-Cover the most important developments across all categories — order wins, bidding activity, M&A, partnerships, financial results. Mention specific competitor names and contract values where available. End with one sentence on the strategic implication for KEC.
+ARTICLES THIS WEEK:
+{article_context}
 
-Write in third person, past tense. Be specific and concise. No filler phrases.
+INSTRUCTIONS:
+- Write 3-4 crisp, confident sentences. No fluff.
+- Lead with the most strategically significant development (largest order win, key competitor move, or market shift).
+- Name the competitor and the deal/event specifically — MD wants facts, not vague statements.
+- If a contract value is mentioned, include it.
+- End with one sentence on what this means for KEC competitively (threat or opportunity).
+- Tone: boardroom-ready. No bullet points. No headers. Plain paragraph.
+- Do NOT start with "This week" — vary the opening.
 
-This week's intelligence articles for {sbu}:
-{article_text}
+Write the brief now:"""
 
+    try:
+        config = types.GenerateContentConfig(max_output_tokens=512)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=config
+        )
+        return response.text.strip()
+    except Exception as e:
+        return f"Summary unavailable for {sbu_name} this week. ({str(e)})"
 Return only the paragraph, no heading, no bullet points."""
 
     try:
@@ -884,7 +919,7 @@ Return only the paragraph, no heading, no bullet points."""
                     )],
                     config=types.GenerateContentConfig(
                         temperature=0.4,
-                        max_output_tokens=300,
+                        max_output_tokens=1000,
                     )
                 )
                 return response.text.strip()
