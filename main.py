@@ -856,8 +856,9 @@ def generate_bu_summary(sbu: str, articles: list) -> str:
 
 Below are this week's intelligence articles for the {sbu} business unit. Convert each distinct news item into a bullet point.
 
-Format each bullet exactly like this:
-- Competitor Name did X for Y project — ₹Z Cr / Geography.
+Format
+- Competitor did X for Y project — ₹Z Cr / Geography.
+- Next competitor did A for B — ₹C Cr / Geography.
 
 Strict rules:
 1. One bullet per distinct news item. Do not merge multiple articles into one bullet.
@@ -891,7 +892,7 @@ Bullets:"""
                     )],
                     config=types.GenerateContentConfig(
                         temperature=0.3,
-                        max_output_tokens=3000,
+                        max_output_tokens=5000,
                     )
                 )
                 return response.text.strip()
@@ -919,6 +920,7 @@ def build_summary_digest_html(recipient_name: str, all_articles: list, sbu_alias
         ]
 
         summary_text = generate_bu_summary(sbu, sbu_articles)
+        summary_text = summary_text.replace('*', '•').replace('\n', '<br>')
         article_count = len(sbu_articles)
 
         sbu_sections += f"""
