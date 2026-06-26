@@ -854,20 +854,23 @@ def generate_bu_summary(sbu: str, articles: list) -> str:
     
     prompt = f"""You are a competitive intelligence analyst at KEC International.
 
-Summarise this week's competitor activity for the {sbu} business unit as a set of bullet points.
+Below are this week's intelligence articles for the {sbu} business unit. Convert each distinct news item into a bullet point.
 
-Rules:
-- Each bullet = one distinct news item. One sentence per bullet, complete and untruncated.
-- Format: "• [Competitor] [what they did] — ₹X Cr / [geography] (if available)."
-- Include contract value and geography wherever available in the data.
-- No strategic commentary. No "this poses a threat to KEC". Just the facts.
-- Cover every distinct development in the articles — do not skip any.
-- Never cut a sentence short. Every bullet must be a complete statement.
+Format each bullet exactly like this:
+- Competitor Name did X for Y project — ₹Z Cr / Geography.
 
-Intelligence articles for {sbu} this week:
+Strict rules:
+1. One bullet per distinct news item. Do not merge multiple articles into one bullet.
+2. Every bullet MUST be a complete sentence. Never end mid-word or mid-sentence.
+3. Include ₹ value and geography in every bullet where the data provides it.
+4. Do NOT add any introduction, heading, summary, or closing line. Start directly with the first bullet.
+5. Do NOT add strategic commentary like "this threatens KEC" or "KEC should watch".
+6. If an article lacks enough detail for a meaningful bullet, skip it silently.
+
+Articles:
 {article_text}
 
-Write the bullet points now:"""
+Bullets:""" 
 
     try:
         api_key = os.environ.get('GEMINI_API_KEY')
@@ -887,8 +890,8 @@ Write the bullet points now:"""
                         parts=[types.Part(text=prompt)]
                     )],
                     config=types.GenerateContentConfig(
-                        temperature=0.4,
-                        max_output_tokens=1000,
+                        temperature=0.3,
+                        max_output_tokens=3000,
                     )
                 )
                 return response.text.strip()
