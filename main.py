@@ -919,6 +919,7 @@ def build_summary_digest_html(recipient_name: str, all_articles: list, sbu_alias
             if any(alias in (a.get('sbu_tagging') or '').lower() for alias in aliases)
         ]
 
+        sbu_articles = deduplicate_articles(sbu_articles)
         summary_text = generate_bu_summary(sbu, sbu_articles)
         summary_text = summary_text.replace('*', '•').replace('\n', '<br>')
         article_count = len(sbu_articles)
