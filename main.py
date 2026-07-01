@@ -1587,6 +1587,11 @@ def get_profile_data(token: str):
                 'preferred_for_executive_summary': bool(row.get('preferred_for_executive_summary')),
                 'source_notes': row.get('source_notes'),
                 'source_match_method': row.get('source_match_method') or 'default',
+                'search_query': row.get('search_query'),
+                'search_query_type': row.get('search_query_type') or 'unknown',
+                'detected_client_authority': row.get('detected_client_authority') or '',
+                'detected_strategic_theme': row.get('detected_strategic_theme') or '',
+                'accepted_by_gate': row.get('accepted_by_gate') or '',
             }
             clean_results.append(clean_row)
 
