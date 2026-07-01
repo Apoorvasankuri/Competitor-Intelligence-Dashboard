@@ -96,7 +96,15 @@ def get_all_data():
                 geography,
                 competitor_tier,
                 rank_score,
-                processed_at
+                processed_at,
+                source_domain,
+                source_type,
+                source_category,
+                source_priority,
+                source_authority_score,
+                preferred_for_executive_summary,
+                source_notes,
+                source_match_method
             FROM processed_articles
             ORDER BY 
                 CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
@@ -129,7 +137,15 @@ def get_all_data():
                 'geography': str(row['geography']) if row.get('geography') and str(row['geography']) != 'None' else None,
                 'competitor_tier': safe_int(row.get('competitor_tier')),
                 'rank_score': safe_int(row.get('rank_score')) or 0,
-                'created_at': row['processed_at'].isoformat() if row.get('processed_at') else None
+                'created_at': row['processed_at'].isoformat() if row.get('processed_at') else None,
+                'source_domain': row.get('source_domain'),
+                'source_type': row.get('source_type') or 'unknown',
+                'source_category': row.get('source_category') or 'unknown',
+                'source_priority': safe_int(row.get('source_priority')) or 8,
+                'source_authority_score': safe_int(row.get('source_authority_score')) or 5,
+                'preferred_for_executive_summary': bool(row.get('preferred_for_executive_summary')),
+                'source_notes': row.get('source_notes'),
+                'source_match_method': row.get('source_match_method') or 'default',
             }
             clean_results.append(clean_row)
         
@@ -244,7 +260,10 @@ def export_csv(start_date: str = '2026-02-25', end_date: str = '2026-03-01'):
                 id, published_date, news_title, link, "Source",
                 relevance_score, competitor_tagging, sbu_tagging,
                 category_tag, summary, contract_value_inr_crore,
-                geography, competitor_tier, rank_score
+                geography, competitor_tier, rank_score,
+                source_domain, source_type, source_category, source_priority,
+                source_authority_score, preferred_for_executive_summary,
+                source_match_method
             FROM processed_articles
             WHERE published_date >= %s
             AND published_date < %s
@@ -1495,9 +1514,12 @@ def get_profile_data(token: str):
                 SELECT id, published_date, news_title, link, "Source",
                     relevance_score, competitor_tagging, sbu_tagging,
                     category_tag, summary, contract_value_inr_crore,
-                    geography, competitor_tier, rank_score, processed_at
+                    geography, competitor_tier, rank_score, processed_at,
+                    source_domain, source_type, source_category, source_priority,
+                    source_authority_score, preferred_for_executive_summary,
+                    source_notes, source_match_method
                 FROM processed_articles
-                ORDER BY 
+                ORDER BY
                     CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
                     rank_score DESC, published_date DESC
             """
@@ -1510,7 +1532,10 @@ def get_profile_data(token: str):
                 SELECT id, published_date, news_title, link, "Source",
                     relevance_score, competitor_tagging, sbu_tagging,
                     category_tag, summary, contract_value_inr_crore,
-                    geography, competitor_tier, rank_score, processed_at
+                    geography, competitor_tier, rank_score, processed_at,
+                    source_domain, source_type, source_category, source_priority,
+                    source_authority_score, preferred_for_executive_summary,
+                    source_notes, source_match_method
                 FROM processed_articles
                 WHERE {conditions}
                 ORDER BY 
@@ -1539,6 +1564,14 @@ def get_profile_data(token: str):
                 'contract_value_inr_crore': safe_float(row.get('contract_value_inr_crore')),
                 'geography': str(row['geography']) if row.get('geography') and str(row['geography']) != 'None' else None,
                 'rank_score': safe_int(row.get('rank_score')) or 0,
+                'source_domain': row.get('source_domain'),
+                'source_type': row.get('source_type') or 'unknown',
+                'source_category': row.get('source_category') or 'unknown',
+                'source_priority': safe_int(row.get('source_priority')) or 8,
+                'source_authority_score': safe_int(row.get('source_authority_score')) or 5,
+                'preferred_for_executive_summary': bool(row.get('preferred_for_executive_summary')),
+                'source_notes': row.get('source_notes'),
+                'source_match_method': row.get('source_match_method') or 'default',
             }
             clean_results.append(clean_row)
 
@@ -1672,7 +1705,7 @@ def chat(req: ChatRequest):
         query = f"""
             SELECT news_title, summary, category_tag, sbu_tagging,
                    competitor_tagging, published_date, link, geography,
-                   contract_value_inr_crore
+                   contract_value_inr_crore, source_type, source_authority_score
             FROM processed_articles
             WHERE {where_sql}
             ORDER BY rank_score DESC NULLS LAST, published_date DESC
@@ -1698,7 +1731,14 @@ def chat(req: ChatRequest):
                 competitor = row.get('competitor_tagging', '')
                 date_str = date.isoformat() if hasattr(date, 'isoformat') else str(date)
                 db_context += f"\n[DB Article {i+1}]\nTitle: {title}\nSummary: {summary}\nCategory: {category}\nCompetitor: {competitor}\nDate: {date_str}\nLink: {link}\n"
-                db_sources.append({"title": title, "link": link, "date": date_str, "type": "database"})
+                db_sources.append({
+                    "title": title,
+                    "link": link,
+                    "date": date_str,
+                    "type": "database",
+                    "source_type": row.get("source_type") or "unknown",
+                    "source_authority_score": safe_int(row.get("source_authority_score")) or 5,
+                })
 
         # ── Call Gemini (new SDK, with Google Search fallback) ─────────────────
         api_key = os.environ.get('GEMINI_API_KEY')
