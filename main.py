@@ -105,6 +105,11 @@ def get_all_data():
                 preferred_for_executive_summary,
                 source_notes,
                 source_match_method
+                search_query,
+                search_query_type,
+                detected_client_authority,
+                detected_strategic_theme,
+                accepted_by_gate  
             FROM processed_articles
             ORDER BY 
                 CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
@@ -146,6 +151,11 @@ def get_all_data():
                 'preferred_for_executive_summary': bool(row.get('preferred_for_executive_summary')),
                 'source_notes': row.get('source_notes'),
                 'source_match_method': row.get('source_match_method') or 'default',
+                'search_query': row.get('search_query'),
+                'search_query_type': row.get('search_query_type') or 'unknown',
+                'detected_client_authority': row.get('detected_client_authority') or '',
+                'detected_strategic_theme': row.get('detected_strategic_theme') or '',
+                'accepted_by_gate': row.get('accepted_by_gate') or '',
             }
             clean_results.append(clean_row)
         
@@ -263,7 +273,9 @@ def export_csv(start_date: str = '2026-02-25', end_date: str = '2026-03-01'):
                 geography, competitor_tier, rank_score,
                 source_domain, source_type, source_category, source_priority,
                 source_authority_score, preferred_for_executive_summary,
-                source_match_method
+                source_match_method,
+                search_query_type, detected_client_authority,
+                detected_strategic_theme, accepted_by_gate
             FROM processed_articles
             WHERE published_date >= %s
             AND published_date < %s
@@ -1517,8 +1529,11 @@ def get_profile_data(token: str):
                     geography, competitor_tier, rank_score, processed_at,
                     source_domain, source_type, source_category, source_priority,
                     source_authority_score, preferred_for_executive_summary,
-                    source_notes, source_match_method
+                    source_notes, source_match_method,
+                    search_query, search_query_type, detected_client_authority,
+                    detected_strategic_theme, accepted_by_gate
                 FROM processed_articles
+                WHERE {conditions}
                 ORDER BY
                     CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
                     rank_score DESC, published_date DESC
