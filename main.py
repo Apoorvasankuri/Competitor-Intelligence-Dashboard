@@ -61,6 +61,29 @@ def safe_int(value):
     except (ValueError, TypeError):
         return None
 
+def filter_representative_only(rows):
+    """
+    Return only rows where the article is the representative of its cluster,
+    or where cluster fields are missing so we do not accidentally hide legacy rows.
+    """
+    if not rows:
+        return rows
+
+    filtered = []
+
+    for row in rows:
+        cluster_id = row.get("cluster_id")
+
+        if cluster_id is None:
+            filtered.append(row)
+            continue
+
+        is_representative = row.get("is_representative_article")
+
+        if is_representative is None or bool(is_representative):
+            filtered.append(row)
+
+    return filtered
 
 @app.get("/")
 def read_root():
@@ -73,7 +96,7 @@ def read_root():
 
 
 @app.get("/api/data")
-def get_all_data():
+def get_all_data(representative_only: bool = False):
     """Get all processed competitor data from the database"""
     try:
         conn = get_db_connection() if os.environ.get('DATABASE_URL') else get_local_db()
@@ -104,12 +127,28 @@ def get_all_data():
                 source_authority_score,
                 preferred_for_executive_summary,
                 source_notes,
-                source_match_method
+                source_match_method,
                 search_query,
                 search_query_type,
                 detected_client_authority,
                 detected_strategic_theme,
-                accepted_by_gate  
+                accepted_by_gate,
+                cluster_id,
+                relationship_type,
+                is_representative_article,
+                cluster_title,
+                cluster_summary,
+                cluster_article_count,
+                cluster_representative_article_id,
+                cluster_source_confidence,
+                cluster_rank_score,
+                cluster_competitors,
+                cluster_sbus,
+                cluster_categories,
+                cluster_primary_source,
+                cluster_primary_source_type,
+                cluster_primary_url,
+                event_impact_score
             FROM processed_articles
             ORDER BY 
                 CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
@@ -156,6 +195,22 @@ def get_all_data():
                 'detected_client_authority': row.get('detected_client_authority') or '',
                 'detected_strategic_theme': row.get('detected_strategic_theme') or '',
                 'accepted_by_gate': row.get('accepted_by_gate') or '',
+                'cluster_id': row.get('cluster_id'),
+                'relationship_type': row.get('relationship_type') or 'separate_event',
+                'is_representative_article': row.get('is_representative_article') if row.get('is_representative_article') is not None else True,
+                'cluster_title': row.get('cluster_title') or (str(row['news_title']) if row.get('news_title') else '') or '',
+                'cluster_summary': row.get('cluster_summary') or (str(row['summary']) if row.get('summary') else '') or '',
+                'cluster_article_count': safe_int(row.get('cluster_article_count')) or 1,
+                'cluster_representative_article_id': row.get('cluster_representative_article_id'),
+                'cluster_source_confidence': row.get('cluster_source_confidence') or 'Low',
+                'cluster_rank_score': safe_int(row.get('cluster_rank_score')) or safe_int(row.get('rank_score')) or 0,
+                'cluster_competitors': row.get('cluster_competitors') or (str(row['competitor_tagging']) if row.get('competitor_tagging') else '') or '',
+                'cluster_sbus': row.get('cluster_sbus') or (str(row['sbu_tagging']) if row.get('sbu_tagging') else '') or '',
+                'cluster_categories': row.get('cluster_categories') or (str(row['category_tag']) if row.get('category_tag') else '') or '',
+                'cluster_primary_source': row.get('cluster_primary_source') or (str(row['Source']) if row.get('Source') else '') or '',
+                'cluster_primary_source_type': row.get('cluster_primary_source_type') or row.get('source_type') or '',
+                'cluster_primary_url': row.get('cluster_primary_url') or (str(row['link']) if row.get('link') else '') or '',
+                'event_impact_score': safe_int(row.get('event_impact_score')) or 0,
             }
             clean_results.append(clean_row)
         
@@ -275,7 +330,10 @@ def export_csv(start_date: str = '2026-02-25', end_date: str = '2026-03-01'):
                 source_authority_score, preferred_for_executive_summary,
                 source_match_method,
                 search_query_type, detected_client_authority,
-                detected_strategic_theme, accepted_by_gate
+                detected_strategic_theme, accepted_by_gate,
+                cluster_id, relationship_type, is_representative_article,
+                cluster_article_count, cluster_source_confidence, cluster_rank_score,
+                cluster_primary_source, cluster_primary_source_type
             FROM processed_articles
             WHERE published_date >= %s
             AND published_date < %s
@@ -1531,7 +1589,14 @@ def get_profile_data(token: str):
                     source_authority_score, preferred_for_executive_summary,
                     source_notes, source_match_method,
                     search_query, search_query_type, detected_client_authority,
-                    detected_strategic_theme, accepted_by_gate
+                    detected_strategic_theme, accepted_by_gate,
+                    cluster_id, relationship_type, is_representative_article,
+                    cluster_title, cluster_summary, cluster_article_count,
+                    cluster_representative_article_id, cluster_source_confidence,
+                    cluster_rank_score, cluster_competitors, cluster_sbus,
+                    cluster_categories, cluster_primary_source,
+                    cluster_primary_source_type, cluster_primary_url,
+                    event_impact_score
                 FROM processed_articles
                 WHERE {conditions}
                 ORDER BY
@@ -1550,7 +1615,13 @@ def get_profile_data(token: str):
                     geography, competitor_tier, rank_score, processed_at,
                     source_domain, source_type, source_category, source_priority,
                     source_authority_score, preferred_for_executive_summary,
-                    source_notes, source_match_method
+                    source_notes, source_match_method,
+                    cluster_id, relationship_type, is_representative_article,
+                    cluster_title, cluster_summary, cluster_article_count,
+                    cluster_representative_article_id, cluster_source_confidence,
+                    cluster_rank_score, cluster_competitors, cluster_sbus,
+                    cluster_categories, cluster_primary_source,
+                    cluster_primary_source_type, cluster_primary_url
                 FROM processed_articles
                 WHERE {conditions}
                 ORDER BY 
