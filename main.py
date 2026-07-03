@@ -362,6 +362,11 @@ def health_deep():
             """)
             row = cur.fetchone()
 
+            if not row:
+                result["warnings"].append(
+                    "No pipeline_runs rows found — scraper/processor may never have run with pipeline tracking enabled."
+                )
+
             if row:
                 result["last_pipeline_run"] = {
                     "pipeline_id": row.get("pipeline_id"),
