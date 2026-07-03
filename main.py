@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import psycopg
 from psycopg.rows import dict_row
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 import math
 from google import genai
@@ -275,6 +275,91 @@ def get_statistics():
 
 
 @app.get("/api/health")
+
+from datetime import datetime, timedelta
+
+@app.get("/api/health/deep")
+def health_deep():
+    """Deep health check with data freshness and pipeline status"""
+    result = {
+        "status": "healthy",
+        "db_ok": False,
+        "processed_articles_count": 0,
+        "latest_processed_date": None,
+        "last_pipeline_run": None,
+        "warnings": []
+    }
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # DB check
+        cur.execute("SELECT 1")
+        result["db_ok"] = True
+
+        # Article count and latest date
+        try:
+            cur.execute("""
+                SELECT COUNT(*), MAX(published_date)
+                FROM processed_articles
+            """)
+            row = cur.fetchone()
+            if row:
+                result["processed_articles_count"] = row[0] or 0
+                latest_date = row[1]
+                if latest_date:
+                    result["latest_processed_date"] = latest_date.isoformat()
+                    # Freshness check
+                    age = datetime.now() - latest_date if not hasattr(latest_date, 'tzinfo') or latest_date.tzinfo is None else datetime.now(latest_date.tzinfo) - latest_date
+                    if age > timedelta(hours=24):
+                        result["status"] = "warning"
+                        result["warnings"].append(
+                            f"Latest processed article is {age.days} days, {age.seconds // 3600} hours old"
+                        )
+        except Exception as e:
+            result["warnings"].append(f"Article freshness check failed: {str(e)}")
+
+        # Pipeline run status
+        try:
+            cur.execute("""
+                SELECT pipeline_id, stage, status, started_at, ended_at, error_message
+                FROM pipeline_runs
+                ORDER BY started_at DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+            if row:
+                result["last_pipeline_run"] = {
+                    "pipeline_id": row[0],
+                    "stage": row[1],
+                    "status": row[2],
+                    "started_at": row[3].isoformat() if row[3] else None,
+                    "ended_at": row[4].isoformat() if row[4] else None,
+                    "error_message": row[5]
+                }
+                if row[2] == "failed":
+                    result["status"] = "error"
+                    result["warnings"].append(f"Last pipeline stage '{row[1]}' failed: {row[5]}")
+        except Exception as e:
+            result["warnings"].append(f"pipeline_runs table not available or empty: {str(e)}")
+
+        cur.close()
+
+    except Exception as e:
+        result["status"] = "error"
+        result["warnings"].append(f"Health check failed: {str(e)}")
+
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return result
+
 def health_check():
     """Health check with database connectivity test"""
     try:
