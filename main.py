@@ -148,7 +148,10 @@ def get_all_data(representative_only: bool = False):
                 cluster_primary_source,
                 cluster_primary_source_type,
                 cluster_primary_url,
-                event_impact_score
+                event_impact_score,
+                actionability_score,
+                confidence_score,
+                sbu_fit_score
             FROM processed_articles
             ORDER BY 
                 CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
@@ -211,6 +214,9 @@ def get_all_data(representative_only: bool = False):
                 'cluster_primary_source_type': row.get('cluster_primary_source_type') or row.get('source_type') or '',
                 'cluster_primary_url': row.get('cluster_primary_url') or (str(row['link']) if row.get('link') else '') or '',
                 'event_impact_score': safe_int(row.get('event_impact_score')) or 0,
+                'actionability_score': safe_int(row.get('actionability_score')) or 0,
+                'confidence_score': safe_int(row.get('confidence_score')) or 0,
+                'sbu_fit_score': safe_int(row.get('sbu_fit_score')) or 0,
             }
             clean_results.append(clean_row)
         
@@ -333,7 +339,8 @@ def export_csv(start_date: str = '2026-02-25', end_date: str = '2026-03-01'):
                 detected_strategic_theme, accepted_by_gate,
                 cluster_id, relationship_type, is_representative_article,
                 cluster_article_count, cluster_source_confidence, cluster_rank_score,
-                cluster_primary_source, cluster_primary_source_type
+                cluster_primary_source, cluster_primary_source_type,
+                event_impact_score, actionability_score, confidence_score, sbu_fit_score
             FROM processed_articles
             WHERE published_date >= %s
             AND published_date < %s
@@ -1596,7 +1603,8 @@ def get_profile_data(token: str):
                     cluster_rank_score, cluster_competitors, cluster_sbus,
                     cluster_categories, cluster_primary_source,
                     cluster_primary_source_type, cluster_primary_url,
-                    event_impact_score
+                    event_impact_score,
+                    actionability_score, confidence_score, sbu_fit_score
                 FROM processed_articles
                 WHERE {conditions}
                 ORDER BY
