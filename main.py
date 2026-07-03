@@ -1740,6 +1740,71 @@ def preprocess_chat_query(message: str):
 
     return {"keywords": keywords, "category": category, "days": days}
 
+# ─── CHAT GROUNDING HELPERS (Change 13) ─────────────────────────────────────────
+CHAT_COMPETITOR_HINTS = {
+    "l&t", "larsen", "toubro", "kalpataru", "kptl", "sterlite", "tata projects",
+    "adani", "techno electric", "skipper", "bajaj", "siemens", "power mech",
+    "afcons", "gr infra", "ncc", "megha", "ge vernova", "hitachi", "rvnl",
+    "irb", "dilip buildcon", "patel engineering", "isgec",
+}
+
+def _chat_query_is_specific(parsed: dict, message: str) -> bool:
+    """Specific = names both a category AND a competitor → tighter (top-15) set."""
+    if not parsed or not parsed.get("category"):
+        return False
+    msg = (message or "").lower()
+    return any(hint in msg for hint in CHAT_COMPETITOR_HINTS)
+
+def _chat_fmt(value, fallback):
+    """Safe display value: None/blank → fallback."""
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    return text if text else fallback
+
+def _build_cluster_context_block(row: dict) -> str:
+    """Compact executive cluster-context block for one representative event."""
+    return (
+        f"[Event Cluster ID: {_chat_fmt(row.get('cluster_id'), 'n/a')}]\n"
+        f"Category: {_chat_fmt(row.get('category_tag'), 'n/a')}\n"
+        f"SBU: {_chat_fmt(row.get('sbu_tagging'), 'n/a')}\n"
+        f"Competitors: {_chat_fmt(row.get('cluster_competitors') or row.get('competitor_tagging'), 'n/a')}\n"
+        f"Client/Authority: {_chat_fmt(row.get('detected_client_authority'), 'n/a')}\n"
+        f"Geography: {_chat_fmt(row.get('geography'), 'n/a')}\n"
+        f"Value (INR crore): {_chat_fmt(row.get('contract_value_inr_crore'), 'n/a')}\n"
+        f"Cluster size: {_chat_fmt(row.get('cluster_article_count'), '1')}\n"
+        f"Confidence: {_chat_fmt(row.get('cluster_source_confidence'), 'Low')}\n"
+        f"Impact score: {_chat_fmt(row.get('event_impact_score'), '0')}\n"
+        f"Source: {_chat_fmt(row.get('cluster_primary_source') or row.get('Source'), 'n/a')} "
+        f"({_chat_fmt(row.get('cluster_primary_source_type') or row.get('source_type'), 'n/a')})\n"
+        f"Title: {_chat_fmt(row.get('news_title'), 'n/a')}\n"
+        f"Executive summary: {_chat_fmt(row.get('cluster_summary') or row.get('summary'), 'n/a')}\n"
+        f"Article link: {_chat_fmt(row.get('cluster_primary_url') or row.get('link'), 'n/a')}\n"
+    )
+
+def _build_chat_source(row: dict, impact: int) -> dict:
+    """Cluster-first source object (superset of legacy keys so UI is unaffected)."""
+    date = row.get("published_date")
+    date_str = date.isoformat() if hasattr(date, "isoformat") else (str(date) if date else "")
+    return {
+        # legacy keys kept for existing frontend rendering
+        "title": row.get("cluster_title") or row.get("news_title") or "",
+        "link": row.get("cluster_primary_url") or row.get("link") or "",
+        "date": date_str,
+        "type": "database",
+        "source_type": row.get("cluster_primary_source_type") or row.get("source_type") or "unknown",
+        "source_authority_score": safe_int(row.get("source_authority_score")) or 5,
+        # richer cluster-first fields
+        "article_id": row.get("id"),
+        "cluster_id": row.get("cluster_id"),
+        "source": row.get("cluster_primary_source") or row.get("Source") or "unknown",
+        "cluster_article_count": safe_int(row.get("cluster_article_count")) or 1,
+        "cluster_source_confidence": row.get("cluster_source_confidence") or "Low",
+        "event_impact_score": impact,
+        "category_tag": row.get("category_tag") or "",
+        "sbu_tagging": row.get("sbu_tagging") or "",
+    }
+
 # ─── CHATBOT ──────────────────────────────────────────────────────────────────
 
 class ChatRequest(PydanticBase):
@@ -1795,20 +1860,68 @@ def chat(req: ChatRequest):
             """)
             params.append(search_keywords)
 
-        # Combine — if no filters at all, fall back to recent articles
+        # ── Cluster-first retrieval (Change 13) ───────────────────────────────
+        # Ground only on representative articles (or legacy rows with no cluster).
+        base_clause = "(is_representative_article = TRUE OR cluster_id IS NULL)"
         if where_clauses:
-            where_sql = " AND ".join(where_clauses)
+            where_sql = base_clause + " AND " + " AND ".join(where_clauses)
         else:
-            where_sql = "published_date >= CURRENT_DATE - INTERVAL '7 days'"
+            where_sql = base_clause + " AND published_date >= CURRENT_DATE - INTERVAL '7 days'"
+
+        # Specific (competitor + category) → tighter cluster set; else default top-25.
+        row_limit = 15 if _chat_query_is_specific(parsed, req.message) else 25
 
         query = f"""
-            SELECT news_title, summary, category_tag, sbu_tagging,
-                   competitor_tagging, published_date, link, geography,
-                   contract_value_inr_crore, source_type, source_authority_score
+            SELECT
+                id,
+                published_date,
+                news_title,
+                link,
+                "Source",
+                relevance_score,
+                actionability_score,
+                confidence_score,
+                sbu_fit_score,
+                competitor_tagging,
+                sbu_tagging,
+                category_tag,
+                summary,
+                contract_value_inr_crore,
+                geography,
+                competitor_tier,
+                rank_score,
+                event_impact_score,
+                source_domain,
+                source_type,
+                source_category,
+                source_priority,
+                source_authority_score,
+                search_query_type,
+                detected_client_authority,
+                detected_strategic_theme,
+                cluster_id,
+                relationship_type,
+                is_representative_article,
+                cluster_title,
+                cluster_summary,
+                cluster_article_count,
+                cluster_representative_article_id,
+                cluster_source_confidence,
+                cluster_rank_score,
+                cluster_competitors,
+                cluster_sbus,
+                cluster_categories,
+                cluster_primary_source,
+                cluster_primary_source_type,
+                cluster_primary_url
             FROM processed_articles
             WHERE {where_sql}
-            ORDER BY rank_score DESC NULLS LAST, published_date DESC
-            LIMIT 8
+            ORDER BY
+                event_impact_score DESC NULLS LAST,
+                cluster_rank_score DESC NULLS LAST,
+                rank_score DESC NULLS LAST,
+                published_date DESC
+            LIMIT {row_limit}
         """
 
         cur.execute(query, params)
@@ -1816,28 +1929,59 @@ def chat(req: ChatRequest):
         cur.close()
         conn.close()
 
-        # Format DB results
+        # ── Cluster-first grounding context + sources (Change 13) ─────────────
         db_context = ""
         db_sources = []
-        if db_results:
-            db_context = "\n\nRELEVANT ARTICLES FROM KEC'S INTERNAL DATABASE:\n"
-            for i, row in enumerate(db_results):
-                title = row.get('news_title', '')
-                summary = row.get('summary', '')
-                date = row.get('published_date', '')
-                link = row.get('link', '')
-                category = row.get('category_tag', '')
-                competitor = row.get('competitor_tagging', '')
-                date_str = date.isoformat() if hasattr(date, 'isoformat') else str(date)
-                db_context += f"\n[DB Article {i+1}]\nTitle: {title}\nSummary: {summary}\nCategory: {category}\nCompetitor: {competitor}\nDate: {date_str}\nLink: {link}\n"
-                db_sources.append({
-                    "title": title,
-                    "link": link,
-                    "date": date_str,
-                    "type": "database",
-                    "source_type": row.get("source_type") or "unknown",
-                    "source_authority_score": safe_int(row.get("source_authority_score")) or 5,
-                })
+        try:
+            # Score each representative row by event impact (highest first).
+            scored_rows = []
+            for row in (db_results or []):
+                try:
+                    scored_rows.append((safe_int(row.get("event_impact_score")) or 0, row))
+                except Exception:
+                    continue
+            scored_rows.sort(key=lambda x: x[0], reverse=True)
+
+            CONTEXT_CHAR_CAP = 6000
+            context_parts = []
+            running_len = 0
+            seen_clusters = set()
+
+            for impact, row in scored_rows:
+                try:
+                    block = _build_cluster_context_block(row)
+                except Exception:
+                    continue
+                # Cap payload; truncate lower-impact events first (keep top event).
+                if context_parts and running_len + len(block) > CONTEXT_CHAR_CAP:
+                    continue
+                context_parts.append(block)
+                running_len += len(block)
+
+                # Deduplicate sources by cluster; null cluster → its own cluster.
+                cid = row.get("cluster_id")
+                skey = f"cluster:{cid}" if cid is not None else f"article:{row.get('id')}"
+                if skey in seen_clusters:
+                    continue
+                seen_clusters.add(skey)
+                try:
+                    db_sources.append(_build_chat_source(row, impact))
+                except Exception:
+                    continue
+
+            if context_parts:
+                db_context = (
+                    "\n\nRELEVANT EVENT CLUSTERS FROM KEC'S INTERNAL DATABASE:\n\n"
+                    + "\n".join(context_parts)
+                )
+
+            # Cluster-first sources: top 6 by event impact.
+            db_sources.sort(key=lambda s: s.get("event_impact_score") or 0, reverse=True)
+            db_sources = db_sources[:6]
+        except Exception as e:
+            print(f"[chat] grounding build failed: {e}")
+            db_context = ""
+            db_sources = []
 
         # ── Call Gemini (new SDK, with Google Search fallback) ─────────────────
         api_key = os.environ.get('GEMINI_API_KEY')
@@ -1849,18 +1993,22 @@ def chat(req: ChatRequest):
         system_prompt = f"""You are KEC Market Intelligence — a competitor intelligence assistant for KEC International, a leading EPC company in India.
 You help the {sbu_profile} business unit track competitor activity.
 
-When the user asks about competitors, order wins, bidding activity, market trends, contracts, or any competitor news, use the database results provided below to answer.
+Answer using the EVENT CLUSTERS provided below, not individual articles. Each cluster is one real-world business event, already deduplicated across sources.
 
-Always mention, when the information is available:
-- The competitor name
-- The contract value (if available)
-- The date of the news
-- At the very end of your response, add [DB] on a new line — do not repeat any content after it
+Guidance:
+- Prefer clusters with a higher Impact score and stronger source (higher authority / confidence).
+- Always mention, when relevant: the competitor name, the client/authority, the project value (INR crore), and the geography.
+- If a cluster's Confidence is Low, flag that briefly.
+- Be concise and executive-ready — 3 to 5 sentences. Focus on business implications for KEC.
+- Never invent or guess numbers, contract values, or client names that aren't in the provided clusters.
+- Do NOT repeat the cluster IDs in your answer, and don't restate the same point from a single cluster twice.
 
-If the database articles don't contain the specific answer, supplement using your general knowledge or web search and cite that part as [AI]. Always try to give a useful answer — never just say "not available" without attempting to answer from general knowledge.
+If the grounded clusters don't contain the answer, say so briefly, then you may supplement from general knowledge or web search, tagging that part [AI]. Always try to give a useful answer.
 
-Be concise — 3 to 5 sentences. Focus on business implications for KEC.
-Never invent or guess at specific numbers or contract values that aren't in the source material.
+At the very end of your response, on its own line:
+- add [DB] if you used any grounded cluster
+- add [AI] if you answered only from general knowledge
+Do not repeat any content after that tag.
 
 {db_context}"""
 
