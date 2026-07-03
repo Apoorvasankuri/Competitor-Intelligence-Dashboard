@@ -95,6 +95,79 @@ def read_root():
     }
 
 
+def _clean_article_row(row: dict) -> dict:
+    """
+    Change 18 (production hardening): row-cleaning logic shared by /api/data
+    and /api/data/profile.
+
+    Previously each endpoint had its own hand-copied version of this dict,
+    and they had silently drifted apart: /api/data/profile's version was
+    missing every cluster_*/event_impact_score/actionability_score/
+    confidence_score/sbu_fit_score field, even on the admin branch whose SQL
+    was already fetching them. Since Executive Brief / SBU Storylines /
+    Competitor Strategy / Client-Authority Tracker all filter on
+    eventImpactScore, any logged-in user (i.e. every real user — /api/data
+    is only the logged-out fallback) got those fields as `undefined` in the
+    JSON, which the frontend defaults to 0/null, so every one of those tabs
+    silently rendered empty. Having one shared function makes that class of
+    drift impossible: both endpoints now always return the same shape.
+
+    Uses row.get() throughout (not row[...]) so it's safe to call even
+    against a SELECT that omits some of these columns — missing ones simply
+    come back as their documented default instead of raising.
+    """
+    return {
+        'id': safe_int(row.get('id')),
+        'publishedate': row['published_date'].isoformat() if row.get('published_date') else None,
+        'newstitle': str(row['news_title']) if row.get('news_title') else '',
+        'link': str(row['link']) if row.get('link') else '',
+        'Source': str(row['Source']) if row.get('Source') else '',
+        'relevance_score': safe_int(row.get('relevance_score')) or 0,
+        'competitor_tagging': str(row['competitor_tagging']) if row.get('competitor_tagging') else '-',
+        'sbu': str(row['sbu_tagging']) if row.get('sbu_tagging') else 'General',
+        'category_tag': str(row['category_tag']) if row.get('category_tag') else 'not_analyzed',
+        'kec_business_summary': str(row['summary']) if row.get('summary') else '',
+        'scraped_content': str(row['scraped_content']) if row.get('scraped_content') else '',
+        'contract_value_inr_crore': safe_float(row.get('contract_value_inr_crore')),
+        'geography': str(row['geography']) if row.get('geography') and str(row['geography']) != 'None' else None,
+        'competitor_tier': safe_int(row.get('competitor_tier')),
+        'rank_score': safe_int(row.get('rank_score')) or 0,
+        'created_at': row['processed_at'].isoformat() if row.get('processed_at') else None,
+        'source_domain': row.get('source_domain'),
+        'source_type': row.get('source_type') or 'unknown',
+        'source_category': row.get('source_category') or 'unknown',
+        'source_priority': safe_int(row.get('source_priority')) or 8,
+        'source_authority_score': safe_int(row.get('source_authority_score')) or 5,
+        'preferred_for_executive_summary': bool(row.get('preferred_for_executive_summary')),
+        'source_notes': row.get('source_notes'),
+        'source_match_method': row.get('source_match_method') or 'default',
+        'search_query': row.get('search_query'),
+        'search_query_type': row.get('search_query_type') or 'unknown',
+        'detected_client_authority': row.get('detected_client_authority') or '',
+        'detected_strategic_theme': row.get('detected_strategic_theme') or '',
+        'accepted_by_gate': row.get('accepted_by_gate') or '',
+        'cluster_id': row.get('cluster_id'),
+        'relationship_type': row.get('relationship_type') or 'separate_event',
+        'is_representative_article': row.get('is_representative_article') if row.get('is_representative_article') is not None else True,
+        'cluster_title': row.get('cluster_title') or (str(row['news_title']) if row.get('news_title') else '') or '',
+        'cluster_summary': row.get('cluster_summary') or (str(row['summary']) if row.get('summary') else '') or '',
+        'cluster_article_count': safe_int(row.get('cluster_article_count')) or 1,
+        'cluster_representative_article_id': row.get('cluster_representative_article_id'),
+        'cluster_source_confidence': row.get('cluster_source_confidence') or 'Low',
+        'cluster_rank_score': safe_int(row.get('cluster_rank_score')) or safe_int(row.get('rank_score')) or 0,
+        'cluster_competitors': row.get('cluster_competitors') or (str(row['competitor_tagging']) if row.get('competitor_tagging') else '') or '',
+        'cluster_sbus': row.get('cluster_sbus') or (str(row['sbu_tagging']) if row.get('sbu_tagging') else '') or '',
+        'cluster_categories': row.get('cluster_categories') or (str(row['category_tag']) if row.get('category_tag') else '') or '',
+        'cluster_primary_source': row.get('cluster_primary_source') or (str(row['Source']) if row.get('Source') else '') or '',
+        'cluster_primary_source_type': row.get('cluster_primary_source_type') or row.get('source_type') or '',
+        'cluster_primary_url': row.get('cluster_primary_url') or (str(row['link']) if row.get('link') else '') or '',
+        'event_impact_score': safe_int(row.get('event_impact_score')) or 0,
+        'actionability_score': safe_int(row.get('actionability_score')) or 0,
+        'confidence_score': safe_int(row.get('confidence_score')) or 0,
+        'sbu_fit_score': safe_int(row.get('sbu_fit_score')) or 0,
+    }
+
+
 @app.get("/api/data")
 def get_all_data(representative_only: bool = False):
     """Get all processed competitor data from the database"""
@@ -166,59 +239,7 @@ def get_all_data(representative_only: bool = False):
         conn.close()
         
         # Manually build clean result list
-        clean_results = []
-        for row in raw_results:
-            clean_row = {
-                'id': safe_int(row.get('id')),
-                'publishedate': row['published_date'].isoformat() if row.get('published_date') else None,
-                'newstitle': str(row['news_title']) if row.get('news_title') else '',
-                'link': str(row['link']) if row.get('link') else '',
-                'Source': str(row['Source']) if row.get('Source') else '',
-                'relevance_score': safe_int(row.get('relevance_score')) or 0,
-                'competitor_tagging': str(row['competitor_tagging']) if row.get('competitor_tagging') else '-',
-                'sbu': str(row['sbu_tagging']) if row.get('sbu_tagging') else 'General',
-                'category_tag': str(row['category_tag']) if row.get('category_tag') else 'not_analyzed',
-                'kec_business_summary': str(row['summary']) if row.get('summary') else '',
-                'scraped_content': str(row['scraped_content']) if row.get('scraped_content') else '',
-                'contract_value_inr_crore': safe_float(row.get('contract_value_inr_crore')),
-                'geography': str(row['geography']) if row.get('geography') and str(row['geography']) != 'None' else None,
-                'competitor_tier': safe_int(row.get('competitor_tier')),
-                'rank_score': safe_int(row.get('rank_score')) or 0,
-                'created_at': row['processed_at'].isoformat() if row.get('processed_at') else None,
-                'source_domain': row.get('source_domain'),
-                'source_type': row.get('source_type') or 'unknown',
-                'source_category': row.get('source_category') or 'unknown',
-                'source_priority': safe_int(row.get('source_priority')) or 8,
-                'source_authority_score': safe_int(row.get('source_authority_score')) or 5,
-                'preferred_for_executive_summary': bool(row.get('preferred_for_executive_summary')),
-                'source_notes': row.get('source_notes'),
-                'source_match_method': row.get('source_match_method') or 'default',
-                'search_query': row.get('search_query'),
-                'search_query_type': row.get('search_query_type') or 'unknown',
-                'detected_client_authority': row.get('detected_client_authority') or '',
-                'detected_strategic_theme': row.get('detected_strategic_theme') or '',
-                'accepted_by_gate': row.get('accepted_by_gate') or '',
-                'cluster_id': row.get('cluster_id'),
-                'relationship_type': row.get('relationship_type') or 'separate_event',
-                'is_representative_article': row.get('is_representative_article') if row.get('is_representative_article') is not None else True,
-                'cluster_title': row.get('cluster_title') or (str(row['news_title']) if row.get('news_title') else '') or '',
-                'cluster_summary': row.get('cluster_summary') or (str(row['summary']) if row.get('summary') else '') or '',
-                'cluster_article_count': safe_int(row.get('cluster_article_count')) or 1,
-                'cluster_representative_article_id': row.get('cluster_representative_article_id'),
-                'cluster_source_confidence': row.get('cluster_source_confidence') or 'Low',
-                'cluster_rank_score': safe_int(row.get('cluster_rank_score')) or safe_int(row.get('rank_score')) or 0,
-                'cluster_competitors': row.get('cluster_competitors') or (str(row['competitor_tagging']) if row.get('competitor_tagging') else '') or '',
-                'cluster_sbus': row.get('cluster_sbus') or (str(row['sbu_tagging']) if row.get('sbu_tagging') else '') or '',
-                'cluster_categories': row.get('cluster_categories') or (str(row['category_tag']) if row.get('category_tag') else '') or '',
-                'cluster_primary_source': row.get('cluster_primary_source') or (str(row['Source']) if row.get('Source') else '') or '',
-                'cluster_primary_source_type': row.get('cluster_primary_source_type') or row.get('source_type') or '',
-                'cluster_primary_url': row.get('cluster_primary_url') or (str(row['link']) if row.get('link') else '') or '',
-                'event_impact_score': safe_int(row.get('event_impact_score')) or 0,
-                'actionability_score': safe_int(row.get('actionability_score')) or 0,
-                'confidence_score': safe_int(row.get('confidence_score')) or 0,
-                'sbu_fit_score': safe_int(row.get('sbu_fit_score')) or 0,
-            }
-            clean_results.append(clean_row)
+        clean_results = [_clean_article_row(row) for row in raw_results]
         
         return {
             "status": "success",
@@ -1749,12 +1770,57 @@ def get_profile_data(token: str):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Admin sees everything, SBU users see only their SBU
+        # Change 18: full column list, matching /api/data exactly (both
+        # branches) — see _clean_article_row for why parity here matters.
+        #
+        # Admin sees everything, SBU users see only their SBU.
         if user['is_admin']:
+            # Change 18 FIX: this was a plain (non-f) triple-quoted string
+            # containing a literal "{conditions}" placeholder that was never
+            # substituted — every admin call sent invalid SQL
+            # ("WHERE {conditions}") straight to Postgres and got a
+            # guaranteed syntax-error 500. Admin has no filter to apply, so
+            # there's simply no WHERE clause here.
             query = """
                 SELECT id, published_date, news_title, link, "Source",
                     relevance_score, competitor_tagging, sbu_tagging,
-                    category_tag, summary, contract_value_inr_crore,
+                    category_tag, summary, scraped_content, contract_value_inr_crore,
+                    geography, competitor_tier, rank_score, processed_at,
+                    source_domain, source_type, source_category, source_priority,
+                    source_authority_score, preferred_for_executive_summary,
+                    source_notes, source_match_method,
+                    search_query, search_query_type, detected_client_authority,
+                    detected_strategic_theme, accepted_by_gate,
+                    cluster_id, relationship_type, is_representative_article,
+                    cluster_title, cluster_summary, cluster_article_count,
+                    cluster_representative_article_id, cluster_source_confidence,
+                    cluster_rank_score, cluster_competitors, cluster_sbus,
+                    cluster_categories, cluster_primary_source,
+                    cluster_primary_source_type, cluster_primary_url,
+                    event_impact_score,
+                    actionability_score, confidence_score, sbu_fit_score
+                FROM processed_articles
+                ORDER BY
+                    CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
+                    rank_score DESC, published_date DESC
+            """
+            cur.execute(query)
+        else:
+            sbus = [s.strip() for s in user['sbu_profile'].split(',') if s.strip()]
+            conditions = " OR ".join(["sbu_tagging ILIKE %s" for _ in sbus])
+            params = [f"%{sbu}%" for sbu in sbus]
+            # Change 18: widened to match /api/data's full column list — this
+            # SELECT was previously missing scraped_content, search_query,
+            # search_query_type, detected_client_authority,
+            # detected_strategic_theme, event_impact_score,
+            # actionability_score, confidence_score, sbu_fit_score, meaning
+            # every SBU-profile (non-admin) user was missing the exact fields
+            # Executive Brief / SBU Storylines / Competitor Strategy /
+            # Client-Authority Tracker filter and rank on.
+            query = f"""
+                SELECT id, published_date, news_title, link, "Source",
+                    relevance_score, competitor_tagging, sbu_tagging,
+                    category_tag, summary, scraped_content, contract_value_inr_crore,
                     geography, competitor_tier, rank_score, processed_at,
                     source_domain, source_type, source_category, source_priority,
                     source_authority_score, preferred_for_executive_summary,
@@ -1771,31 +1837,6 @@ def get_profile_data(token: str):
                     actionability_score, confidence_score, sbu_fit_score
                 FROM processed_articles
                 WHERE {conditions}
-                ORDER BY
-                    CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
-                    rank_score DESC, published_date DESC
-            """
-            cur.execute(query)
-        else:
-            sbus = [s.strip() for s in user['sbu_profile'].split(',') if s.strip()]
-            conditions = " OR ".join(["sbu_tagging ILIKE %s" for _ in sbus])
-            params = [f"%{sbu}%" for sbu in sbus]
-            query = f"""
-                SELECT id, published_date, news_title, link, "Source",
-                    relevance_score, competitor_tagging, sbu_tagging,
-                    category_tag, summary, contract_value_inr_crore,
-                    geography, competitor_tier, rank_score, processed_at,
-                    source_domain, source_type, source_category, source_priority,
-                    source_authority_score, preferred_for_executive_summary,
-                    source_notes, source_match_method,
-                    cluster_id, relationship_type, is_representative_article,
-                    cluster_title, cluster_summary, cluster_article_count,
-                    cluster_representative_article_id, cluster_source_confidence,
-                    cluster_rank_score, cluster_competitors, cluster_sbus,
-                    cluster_categories, cluster_primary_source,
-                    cluster_primary_source_type, cluster_primary_url
-                FROM processed_articles
-                WHERE {conditions}
                 ORDER BY 
                     CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
                     rank_score DESC, published_date DESC
@@ -1806,37 +1847,10 @@ def get_profile_data(token: str):
         cur.close()
         conn.close()
 
-        clean_results = []
-        for row in raw_results:
-            clean_row = {
-                'id': safe_int(row.get('id')),
-                'publishedate': row['published_date'].isoformat() if row.get('published_date') else None,
-                'newstitle': str(row['news_title']) if row.get('news_title') else '',
-                'link': str(row['link']) if row.get('link') else '',
-                'Source': str(row['Source']) if row.get('Source') else '',
-                'relevance_score': safe_int(row.get('relevance_score')) or 0,
-                'competitor_tagging': str(row['competitor_tagging']) if row.get('competitor_tagging') else '-',
-                'sbu': str(row['sbu_tagging']) if row.get('sbu_tagging') else 'General',
-                'category_tag': str(row['category_tag']) if row.get('category_tag') else 'not_analyzed',
-                'kec_business_summary': str(row['summary']) if row.get('summary') else '',
-                'contract_value_inr_crore': safe_float(row.get('contract_value_inr_crore')),
-                'geography': str(row['geography']) if row.get('geography') and str(row['geography']) != 'None' else None,
-                'rank_score': safe_int(row.get('rank_score')) or 0,
-                'source_domain': row.get('source_domain'),
-                'source_type': row.get('source_type') or 'unknown',
-                'source_category': row.get('source_category') or 'unknown',
-                'source_priority': safe_int(row.get('source_priority')) or 8,
-                'source_authority_score': safe_int(row.get('source_authority_score')) or 5,
-                'preferred_for_executive_summary': bool(row.get('preferred_for_executive_summary')),
-                'source_notes': row.get('source_notes'),
-                'source_match_method': row.get('source_match_method') or 'default',
-                'search_query': row.get('search_query'),
-                'search_query_type': row.get('search_query_type') or 'unknown',
-                'detected_client_authority': row.get('detected_client_authority') or '',
-                'detected_strategic_theme': row.get('detected_strategic_theme') or '',
-                'accepted_by_gate': row.get('accepted_by_gate') or '',
-            }
-            clean_results.append(clean_row)
+        # Change 18: use the same shared helper as /api/data — see
+        # _clean_article_row's docstring for why this endpoint silently
+        # dropped every cluster/event-impact field before.
+        clean_results = [_clean_article_row(row) for row in raw_results]
 
         return {
             "status": "success",
