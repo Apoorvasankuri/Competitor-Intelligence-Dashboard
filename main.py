@@ -274,10 +274,6 @@ def get_statistics():
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
-@app.get("/api/health")
-
-from datetime import datetime, timedelta
-
 @app.get("/api/health/deep")
 def health_deep():
     """Deep health check with data freshness and pipeline status"""
@@ -360,6 +356,7 @@ def health_deep():
 
     return result
 
+@app.get("/api/health")
 def health_check():
     """Health check with database connectivity test"""
     try:
