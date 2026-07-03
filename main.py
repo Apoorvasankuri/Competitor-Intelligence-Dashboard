@@ -291,53 +291,72 @@ def health_deep():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # DB check
         cur.execute("SELECT 1")
         result["db_ok"] = True
 
         # Article count and latest date
         try:
             cur.execute("""
-                SELECT COUNT(*), MAX(published_date)
+                SELECT
+                    COUNT(*) AS processed_articles_count,
+                    MAX(published_date) AS latest_processed_date
                 FROM processed_articles
             """)
             row = cur.fetchone()
+
             if row:
-                result["processed_articles_count"] = row[0] or 0
-                latest_date = row[1]
+                result["processed_articles_count"] = row.get("processed_articles_count") or 0
+                latest_date = row.get("latest_processed_date")
+
                 if latest_date:
                     result["latest_processed_date"] = latest_date.isoformat()
-                    # Freshness check
-                    age = datetime.now() - latest_date if not hasattr(latest_date, 'tzinfo') or latest_date.tzinfo is None else datetime.now(latest_date.tzinfo) - latest_date
+
+                    if hasattr(latest_date, "tzinfo") and latest_date.tzinfo is not None:
+                        age = datetime.now(latest_date.tzinfo) - latest_date
+                    else:
+                        age = datetime.now() - latest_date
+
                     if age > timedelta(hours=24):
                         result["status"] = "warning"
                         result["warnings"].append(
                             f"Latest processed article is {age.days} days, {age.seconds // 3600} hours old"
                         )
+
         except Exception as e:
             result["warnings"].append(f"Article freshness check failed: {str(e)}")
 
         # Pipeline run status
         try:
             cur.execute("""
-                SELECT pipeline_id, stage, status, started_at, ended_at, error_message
+                SELECT
+                    pipeline_id,
+                    stage,
+                    status,
+                    started_at,
+                    ended_at,
+                    error_message
                 FROM pipeline_runs
                 ORDER BY started_at DESC
                 LIMIT 1
             """)
             row = cur.fetchone()
+
             if row:
                 result["last_pipeline_run"] = {
-                    "pipeline_id": row[0],
-                    "stage": row[1],
-                    "status": row[2],
-                    "started_at": row[3].isoformat() if row[3] else None,
-                    "ended_at": row[4].isoformat() if row[4] else None,
-                    "error_message": row[5]
+                    "pipeline_id": row.get("pipeline_id"),
+                    "stage": row.get("stage"),
+                    "status": row.get("status"),
+                    "started_at": row.get("started_at").isoformat() if row.get("started_at") else None,
+                    "ended_at": row.get("ended_at").isoformat() if row.get("ended_at") else None,
+                    "error_message": row.get("error_message")
                 }
-                if row[2] == "failed":
+
+                if row.get("status") == "failed":
                     result["status"] = "error"
-                    result["warnings"].append(f"Last pipeline stage '{row[1]}' failed: {row[5]}")
+                    result["warnings"].append(
+                        f"Last pipeline stage '{row.get('stage')}' failed: {row.get('error_message')}"
+                    )
+
         except Exception as e:
             result["warnings"].append(f"pipeline_runs table not available or empty: {str(e)}")
 
@@ -378,7 +397,70 @@ def health_check():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+@app.get("/api/admin/pipeline-runs")
+def get_pipeline_runs(token: str):
+    """Return most recent pipeline run rows. Admin-only."""
+    user = get_user_from_token(token)
+    if not user or not user["is_admin"]:
+        raise HTTPException(status_code=403, detail="Admin access required")
 
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        try:
+            cur.execute("""
+                SELECT
+                    id,
+                    pipeline_id,
+                    stage,
+                    status,
+                    COALESCE(articles_in, 0) AS articles_in,
+                    COALESCE(articles_out, 0) AS articles_out,
+                    error_message,
+                    started_at,
+                    ended_at
+                FROM pipeline_runs
+                ORDER BY started_at DESC
+                LIMIT 100
+            """)
+            rows = cur.fetchall()
+
+            runs = []
+            for r in rows:
+                runs.append({
+                    "id": r.get("id"),
+                    "pipeline_id": r.get("pipeline_id"),
+                    "stage": r.get("stage"),
+                    "status": r.get("status"),
+                    "articles_in": r.get("articles_in"),
+                    "articles_out": r.get("articles_out"),
+                    "error_message": r.get("error_message"),
+                    "started_at": r.get("started_at").isoformat() if r.get("started_at") else None,
+                    "ended_at": r.get("ended_at").isoformat() if r.get("ended_at") else None,
+                })
+
+            cur.close()
+            return {"status": "success", "runs": runs}
+
+        except Exception as e:
+            cur.close()
+            return {
+                "status": "success",
+                "runs": [],
+                "warning": f"pipeline_runs unavailable: {str(e)}"
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 @app.get("/api/raw-count")
 def get_raw_count():
