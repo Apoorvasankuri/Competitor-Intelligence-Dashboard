@@ -30,19 +30,27 @@ def get_db_connection():
 
 
 def _first_present(record, keys):
-    """Return the first non-None/non-empty value found in record for any of keys."""
+    """
+    Return the first non-None/non-empty value found in record for any of keys.
+    Matching is case-insensitive and whitespace-tolerant, since CMIE's real
+    column headers ("Company Name", "Cost (Rs.million)", etc.) don't always
+    match the casing/format used in their own API documentation.
+    """
+    lower_map = {str(k).strip().lower(): v for k, v in record.items()}
     for key in keys:
-        if key in record:
-            value = record[key]
-            if value is not None and value != "":
-                return value
+        value = lower_map.get(str(key).strip().lower())
+        if value is not None and value != "":
+            return value
     return None
 
 
 def normalize_cmie_record(record):
     """
-    Map a raw CMIE API record (dict, with keys of unknown/variable casing)
-    into our normalized cmie_projects column shape.
+    Map a raw CMIE API record (dict) into our normalized cmie_projects
+    column shape. The key lists below include both the names from CMIE's
+    API doc and the actual header text observed from live "details" calls
+    (e.g. "Company Name", "Cost (Rs.million)", "Project ID"), since the two
+    don't always match.
 
     Returns a dict with normalized keys, plus 'raw_payload' holding the
     original record untouched. Returns None if the record isn't a dict.
@@ -61,19 +69,21 @@ def normalize_cmie_record(record):
         ["COMPANY_NAME", "company_name", "Promoter", "promoter_name", "Company Name"],
     )
     project_cost = _first_present(
-        record, ["COST", "cost", "Project Cost", "project_cost"]
+        record,
+        ["COST", "cost", "Project Cost", "project_cost", "Cost (Rs.million)"],
     )
     project_status = _first_present(
         record, ["STATUS", "status", "Project Status", "project_status"]
     )
-    industry = _first_present(record, ["INDUSTRY", "industry"])
+    industry = _first_present(record, ["INDUSTRY", "industry", "Industry Group"])
     sector = _first_present(record, ["SECTOR", "sector"])
-    ownership = _first_present(record, ["OWNERSHIP", "ownership"])
-    state = _first_present(record, ["STATE", "state"])
+    ownership = _first_present(record, ["OWNERSHIP", "ownership", "Ownership Group"])
+    state = _first_present(record, ["STATE", "state", "Location state"])
     district = _first_present(record, ["DISTRICT", "district"])
     location = _first_present(record, ["LOCATION", "location"])
     expected_completion = _first_present(
-        record, ["COMPLETION_DATE", "completion_date", "Expected Completion"]
+        record,
+        ["COMPLETION_DATE", "completion_date", "Expected Completion", "Expected completion by dates"],
     )
     latest_event_date = _first_present(
         record, ["EVENT_DATE", "event_date", "Latest Event Date"]
@@ -192,19 +202,71 @@ def upsert_cmie_projects(records):
             conn.close()
 
 
+def _rows_to_dicts(data):
+    """
+    Convert CMIE's tabular {head, data} response shape into a list of plain
+    dicts keyed by column header text.
+
+    Observed live shape:
+        data["head"] == [["Company Name", "Project Name", "Cost (Rs.million)", ...]]
+        data["data"] == [["A M R L ...", "Nanguneri ... Project", "8,000.0", ...], ...]
+
+    head is a list containing a single list of column names; each row in
+    "data" is a plain array whose values line up positionally with that
+    column list (not a dict), so we zip them together here.
+    """
+    head = data.get("head")
+    rows = data.get("data")
+
+    if not isinstance(head, list) or not head or not isinstance(rows, list):
+        return []
+
+    headers = head[0] if isinstance(head[0], list) else head
+
+    record_list = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        record = {}
+        for i, col_name in enumerate(headers):
+            record[col_name] = row[i] if i < len(row) else None
+        record_list.append(record)
+
+    return record_list
+
+
 def _extract_record_list(data):
     """
     Normalize the various shapes the CMIE API might return into a plain list
-    of record dicts: a bare list, or a dict containing 'data'/'rows'/'projects'.
+    of record dicts.
+
+    Handles, in order:
+      1. A bare list of dicts.
+      2. The real observed tabular shape: dict with "head" (column names)
+         and "data" (row arrays) -- this is what live "details" calls return.
+      3. A dict containing "data"/"rows"/"projects" that is already a list
+         of dicts (as CMIE's own doc describes, kept as a fallback in case
+         other reporttypes respond this way).
+      4. A single-record dict (e.g. a project-profile call by projectid).
     """
     if isinstance(data, list):
         return data
 
     if isinstance(data, dict):
+        if "head" in data and "data" in data and isinstance(data.get("data"), list):
+            rows = data["data"]
+            if rows and isinstance(rows[0], list):
+                return _rows_to_dicts(data)
+            if rows and isinstance(rows[0], dict):
+                return rows
+            if not rows:
+                return []
+
         for key in ("data", "rows", "projects"):
             value = data.get(key)
-            if isinstance(value, list):
+            if isinstance(value, list) and value and isinstance(value[0], dict):
                 return value
+
         # Some single-project-profile responses may come back as one dict
         # representing a single record rather than a list.
         if any(k in data for k in ("PROJECTID", "projectid", "Project ID", "ProjectID")):
