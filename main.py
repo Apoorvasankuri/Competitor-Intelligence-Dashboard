@@ -1239,7 +1239,50 @@ def build_multi_sbu_crisp_html(recipient_name: str, articles_by_sbu: dict) -> st
         rows = _crisp_bullet_rows(main_events)
         sections += _crisp_section_header(sbu)
         sections += f"""
-        <table width="100%" cellpadding="0" cellspacing="0" border="0"
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:8px;">
+          {rows}
+        </table>"""
+        if authority_items:
+            sections += _crisp_subsection_label('Client / Authority Activity')
+            sections += f"""
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
+              {_crisp_bullet_rows(authority_items)}
+            </table>"""
+        else:
+            sections += '<div style="margin-bottom:32px;"></div>'
+    intro = "Here are this week's high-impact events across your business units, matching your SBU Storylines dashboard view."
+    return _crisp_email_shell(recipient_name, intro, sections)
+
+
+def build_single_sbu_category_crisp_html(recipient_name: str, sbu: str, articles: list) -> str:
+    """Single-SBU users: mirrors the Executive Brief tab, scoped to their
+    one SBU — 14-day lookback, event_impact_score >= 150, deduped,
+    tier-aware sorted, capped at 5 events per category."""
+    pool = [a for a in articles if _within_lookback(a, DIGEST_BRIEF_LOOKBACK_DAYS)
+            and (a.get('event_impact_score') or 0) >= DIGEST_BRIEF_MIN_IMPACT_SCORE]
+
+    grouped = {}
+    for a in pool:
+        cat = (a.get('category') or 'general').lower()
+        grouped.setdefault(cat, []).append(a)
+
+    sections = ''
+    for cat, items in grouped.items():
+        items.sort(key=_tier_aware_sort_key)
+        capped = get_deduped_event_list(items)[:DIGEST_BRIEF_MAX_PER_CATEGORY]
+        rows = _crisp_bullet_rows(capped)
+        sections += _crisp_section_header(cat)
+        sections += f"""
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
+          {rows}
+        </table>"""
+    if not sections:
+        sections = _crisp_section_header(sbu) + f"""
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
+          {_crisp_bullet_rows([])}
+        </table>"""
+    intro = f"Here are this week's high-impact {sbu} events, matching your Executive Brief dashboard view."
+    return _crisp_email_shell(recipient_name, intro, sections)
 
 
 def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
