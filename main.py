@@ -977,6 +977,148 @@ def group_articles_for_email(articles):
     return ordered
 
 
+def _crisp_bullet_rows(articles: list) -> str:
+    """Render a list of articles as bare-fact bullet rows: summary text,
+    contract value if present, date, and a read-more link. No source badge,
+    no confidence labels, no strategic commentary — matches the dashboard's
+    bare-facts-only tabs."""
+    if not articles:
+        return '<tr><td style="padding:12px 16px;color:#666666;font-size:13px;font-family:Arial,sans-serif;font-style:italic;">No high-impact events this week.</td></tr>'
+
+    rows = ''
+    for idx, article in enumerate(articles):
+        summary = article.get('summary', '') or article.get('title', '')
+        competitors = article.get('competitors', [])
+        for c in sorted(competitors, key=len, reverse=True):
+            if c and c != '-':
+                summary = summary.replace(c, f'<strong>{c}</strong>')
+
+        try:
+            fd = datetime.fromisoformat(article.get('date', '')).strftime('%b %d')
+        except Exception:
+            fd = (article.get('date') or '')[:10]
+
+        value_line = ''
+        if article.get('contract_value'):
+            value_line = f'<p style="margin:2px 0 0 0;font-size:13px;color:#0F2B4C;font-weight:bold;font-family:Arial,sans-serif;">₹{article["contract_value"]:,.0f} Cr</p>'
+
+        border_top = 'border-top:1px solid #E5E2D0;' if idx > 0 else ''
+
+        rows += f"""
+        <tr>
+          <td style="padding:14px 16px;{border_top}background:#FFFFFF;">
+            <p style="margin:0;font-size:14px;color:#333333;line-height:1.7;font-family:Arial,sans-serif;">{summary}</p>
+            {value_line}
+            <p style="margin:6px 0 0 0;font-size:12px;color:#666666;font-family:Arial,sans-serif;">
+              {fd}
+              &nbsp;&nbsp;<a href="{article.get('link', '#')}" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">Open →</a>
+            </p>
+          </td>
+        </tr>"""
+    return rows
+
+
+def _crisp_section_header(label: str) -> str:
+    return f"""
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:8px;">
+      <tr>
+        <td style="background:#1A3D6D;padding:12px 20px;border-radius:6px;">
+          <p style="margin:0;font-size:13px;font-weight:bold;color:#C9A84C;letter-spacing:2px;text-transform:uppercase;font-family:Arial,sans-serif;">{label}</p>
+        </td>
+      </tr>
+    </table>"""
+
+
+def _crisp_email_shell(recipient_name: str, intro: str, sections_html: str) -> str:
+    """Shared HTML shell for both crisp digest variants (multi-SBU and
+    single-SBU/category-wise) — same visual language as build_email_html,
+    kept as one shell so both variants stay visually consistent."""
+    return f"""<!DOCTYPE html>
+<html xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#F9F8F3;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F9F8F3;">
+    <tr>
+      <td align="center" style="padding:0;">
+        <table width="800" cellpadding="0" cellspacing="0" border="0" style="max-width:800px;width:100%;">
+          <tr>
+            <td style="background:#0F2B4C;padding:32px;text-align:center;">
+              <h1 style="margin:0;font-size:24px;color:#FFFFFF;font-family:Georgia,serif;font-weight:bold;">Competitor Intelligence</h1>
+              <p style="margin:8px 0 0 0;font-size:12px;color:#C9A84C;letter-spacing:3px;font-family:Arial,sans-serif;">WEEKLY BRIEF</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#FFFFFF;padding:32px;">
+              <p style="margin:0 0 8px 0;font-size:15px;color:#333333;font-family:Arial,sans-serif;">Hi <strong>{recipient_name}</strong>,</p>
+              <p style="margin:0 0 28px 0;font-size:14px;color:#666666;line-height:1.6;font-family:Arial,sans-serif;">{intro}</p>
+              {sections_html}
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-left:4px solid #C9A84C;background:#F9F8F3;margin-top:16px;">
+                <tr>
+                  <td style="padding:14px 16px;">
+                    <p style="margin:0;font-size:13px;color:#666666;font-family:Arial,sans-serif;">
+                      Log in to the <a href="https://competitor-intelligence-dashboard-u.vercel.app/index.html" style="color:#FFFFFF;font-weight:bold;text-decoration:none;">KEC Intel Platform</a> for full details.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#0F2B4C;padding:16px;text-align:center;">
+              <p style="margin:0;font-size:12px;color:rgba(255,255,255,0.5);font-family:Arial,sans-serif;">KEC Competitor Intelligence Platform · Weekly Digest</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+def build_multi_sbu_crisp_html(recipient_name: str, articles_by_sbu: dict) -> str:
+    """Multi-SBU users (including admins): one section per SBU, bare-fact
+    bullets, no cap, high-impact only (already filtered upstream)."""
+    sections = ''
+    for sbu, articles in articles_by_sbu.items():
+        rows = _crisp_bullet_rows(articles)
+        sections += _crisp_section_header(sbu)
+        sections += f"""
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
+          {rows}
+        </table>"""
+    intro = "Here are this week's high-impact events across your business units."
+    return _crisp_email_shell(recipient_name, intro, sections)
+
+
+def build_single_sbu_category_crisp_html(recipient_name: str, sbu: str, articles: list) -> str:
+    """Single-SBU users: one section per category within their one SBU,
+    bare-fact bullets, no cap, high-impact only (already filtered upstream)."""
+    grouped = {}
+    for a in articles:
+        cat = (a.get('category') or 'general').lower()
+        grouped.setdefault(cat, []).append(a)
+
+    sections = ''
+    for cat, items in grouped.items():
+        rows = _crisp_bullet_rows(items)
+        sections += _crisp_section_header(cat)
+        sections += f"""
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
+          {rows}
+        </table>"""
+    if not sections:
+        sections = _crisp_section_header(sbu) + f"""
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
+          {_crisp_bullet_rows([])}
+        </table>"""
+    intro = f"Here are this week's high-impact {sbu} events."
+    return _crisp_email_shell(recipient_name, intro, sections)
+
+
 def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
     def render_articles(sbu, articles):
         grouped = group_articles_for_email(articles)
@@ -1333,14 +1475,23 @@ def send_weekly_digest(token: str = ""):
         # ── Step 2: Get this week's articles ──────────────────────────────────
         conn = get_db_connection()
         cur = conn.cursor()
+        # Email digest uses the same high-impact threshold as the dashboard's
+        # Executive Brief (event_impact_score >= 150, same excluded
+        # categories) so the two surfaces never disagree on what counts as
+        # "worth a CEO's time." No LLM call needed here — event_impact_score
+        # and summary are already computed by the processor.
         cur.execute("""
             SELECT id, news_title, category_tag, sbu_tagging,
                    summary, link, published_date, competitor_tagging,
-                   contract_value_inr_crore, geography, rank_score, "Source"
+                   contract_value_inr_crore, geography, rank_score,
+                   event_impact_score, competitor_tier, "Source"
             FROM processed_articles
             WHERE published_date >= CURRENT_DATE - INTERVAL '7 days'
-            AND category_tag IS NOT NULL
-            ORDER BY rank_score DESC NULLS LAST, published_date DESC
+              AND category_tag IS NOT NULL
+              AND category_tag NOT IN ('stock market', 'industry trends', 'leadership/management')
+              AND COALESCE(event_impact_score, 0) >= 150
+            ORDER BY event_impact_score DESC NULLS LAST,
+                     rank_score DESC NULLS LAST, published_date DESC
         """)
         raw_articles = cur.fetchall()
         cur.close()
@@ -1366,6 +1517,8 @@ def send_weekly_digest(token: str = ""):
                 'contract_value': safe_float(a.get('contract_value_inr_crore')),
                 'geography': a.get('geography'),
                 'rank_score': a.get('rank_score') or 0,
+                'event_impact_score': a.get('event_impact_score') or 0,
+                'competitor_tier': a.get('competitor_tier'),
             })
 
         # ── Step 3: Send to each user ─────────────────────────────────────────
@@ -1429,19 +1582,25 @@ def send_weekly_digest(token: str = ""):
                     if sbu_articles:
                         articles_by_sbu[sbu] = sbu_articles
 
-            if not articles_by_sbu and u['email'].lower() not in SUMMARY_DIGEST_EMAILS:
+            if not articles_by_sbu:
                 skipped.append(u['email'])
                 continue
 
+            # Profile-driven branching (retires the old hardcoded
+            # SUMMARY_DIGEST_EMAILS allowlist): admins and anyone mapped to
+            # more than one SBU get a crisp SBU-wise brief; users mapped to
+            # exactly one SBU get a crisp category-wise brief within that SBU.
+            is_multi_sbu = is_admin or sbu_profile == 'Admin' or len(sbus) > 1
+
             try:
-                # Senior leadership get AI-generated BU summary digest
-                if u['email'].lower() in SUMMARY_DIGEST_EMAILS:
-                    logging.info(f"   📋 Generating executive summary digest for {u['email']}...")
-                    html = build_summary_digest_html(u['name'], all_articles, SBU_ALIAS_MAP)
-                    subject = f"[KEC Intel] Weekly Executive Brief — All SBUs"
+                if is_multi_sbu:
+                    html = build_multi_sbu_crisp_html(u['name'], articles_by_sbu)
+                    subject = "[KEC Intel] Weekly Brief — " + (", ".join(sbus) if not (is_admin or sbu_profile == 'Admin') else "All SBUs")
                 else:
-                    html = build_email_html(u['name'], articles_by_sbu)
-                    subject = f"[KEC Intel] Weekly Competitor Digest — {sbu_profile}"
+                    single_sbu = sbus[0] if sbus else sbu_profile
+                    single_sbu_articles = articles_by_sbu.get(single_sbu, [])
+                    html = build_single_sbu_category_crisp_html(u['name'], single_sbu, single_sbu_articles)
+                    subject = f"[KEC Intel] Weekly Brief — {single_sbu}"
                 to_email = os.environ.get('TEST_EMAIL', u['email']) \
                     if os.environ.get('TEST_MODE') == 'true' else u['email']
 
