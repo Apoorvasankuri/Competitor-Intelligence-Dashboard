@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 import csv
 import io
+import re
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg
 from psycopg.rows import dict_row
@@ -977,6 +978,93 @@ def group_articles_for_email(articles):
     return ordered
 
 
+def _get_executive_cluster_list(articles: list) -> list:
+    """Port of the frontend's getExecutiveClusterList: keeps one
+    representative article per cluster_id, preferring the row already
+    flagged is_representative_article. Articles with no cluster_id pass
+    through untouched (handled by the Jaccard fallback next)."""
+    result = []
+    cluster_index = {}
+    for article in articles:
+        cid = article.get('cluster_id')
+        if cid is None or cid == '':
+            result.append(article)
+            continue
+        if cid not in cluster_index:
+            cluster_index[cid] = len(result)
+            result.append(article)
+        else:
+            pos = cluster_index[cid]
+            existing = result[pos]
+            if existing.get('is_representative_article') is False and article.get('is_representative_article') is not False:
+                result[pos] = article
+    return result
+
+
+_STOPWORDS = {'a', 'an', 'the', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'of',
+              'with', 'by', 'is', 'was', 'has', 'this', 'that', 'their', 'these',
+              'will', 'been', 'also', 'from'}
+
+
+def _jaccard_similarity(text1: str, text2: str) -> float:
+    w1 = {w for w in re.split(r'\W+', text1.lower()) if len(w) > 3 and w not in _STOPWORDS}
+    w2 = {w for w in re.split(r'\W+', text2.lower()) if len(w) > 3 and w not in _STOPWORDS}
+    if not w1 or not w2:
+        return 0.0
+    return len(w1 & w2) / len(w1 | w2)
+
+
+def _dedupe_similar_articles(articles: list) -> list:
+    """Port of the frontend's dedupeSimilarArticles Jaccard fallback, for
+    articles with no cluster_id to group by."""
+    kept = []
+    for article in articles:
+        has_cluster = article.get('cluster_id') not in (None, '')
+        if has_cluster:
+            kept.append(article)
+            continue
+        is_duplicate = False
+        for k in kept:
+            summary1 = article.get('summary') or article.get('title') or ''
+            summary2 = k.get('summary') or k.get('title') or ''
+            jaccard = _jaccard_similarity(summary1, summary2)
+            if jaccard > 0.35:
+                is_duplicate = True
+                break
+            shared_competitor = bool(article.get('competitors')) and bool(k.get('competitors')) and \
+                any(c in k['competitors'] for c in article['competitors'])
+            if not shared_competitor:
+                continue
+            val1, val2 = article.get('contract_value'), k.get('contract_value')
+            if val1 and val2 and abs(val1 - val2) / max(val1, val2) < 0.10:
+                is_duplicate = True
+                break
+            if jaccard > 0.20:
+                is_duplicate = True
+                break
+            if article.get('geography') and k.get('geography') and \
+               str(article['geography']).lower() == str(k['geography']).lower():
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            kept.append(article)
+    return kept
+
+
+def get_deduped_event_list(articles: list) -> list:
+    return _dedupe_similar_articles(_get_executive_cluster_list(articles))
+
+
+def _tier_aware_sort_key(article: dict):
+    tier = article.get('competitor_tier')
+    tier = 4 if tier is None else tier
+    impact = article.get('event_impact_score') or 0
+    rank = article.get('rank_score') or 0
+    date_obj = article.get('date_obj')
+    # Sort: impact desc, tier asc (1 = most important), rank desc, date desc
+    return (-impact, tier, -rank, -(date_obj.toordinal() if date_obj else 0))
+
+
 def _crisp_bullet_rows(articles: list) -> str:
     """Render a list of articles as bare-fact bullet rows: summary text,
     contract value if present, date, and a read-more link. No source badge,
@@ -1079,44 +1167,79 @@ def _crisp_email_shell(recipient_name: str, intro: str, sections_html: str) -> s
 </html>"""
 
 
+# These mirror the frontend's tab constants exactly (index.html:
+# BRIEF_MIN_IMPACT_SCORE/BRIEF_MAX_PER_CATEGORY for Executive Brief,
+# STORYLINE_MIN_IMPACT_SCORE/STORYLINE_MAX_EVENTS_PER_SBU for SBU
+# Storylines, CLIENT_TRACKER_LOOKBACK_DAYS for the authority sub-section)
+# so the email and dashboard never diverge again.
+DIGEST_BRIEF_MIN_IMPACT_SCORE = 150
+DIGEST_BRIEF_LOOKBACK_DAYS = 14
+DIGEST_BRIEF_MAX_PER_CATEGORY = 5
+
+DIGEST_STORYLINE_MIN_IMPACT_SCORE = 120
+DIGEST_STORYLINE_LOOKBACK_DAYS = 14
+DIGEST_STORYLINE_MAX_EVENTS_PER_SBU = 6
+
+DIGEST_AUTHORITY_LOOKBACK_DAYS = 90
+DIGEST_AUTHORITY_MAX_ITEMS_PER_SBU = 3
+DIGEST_AUTHORITY_QUERY_TYPES = {'site_client_authority', 'site_government_policy'}
+
+
+def _within_lookback(article: dict, days: int) -> bool:
+    d = article.get('date_obj')
+    if not d:
+        return False
+    cutoff = date.today() - timedelta(days=days)
+    d_date = d.date() if isinstance(d, datetime) else d
+    return d_date >= cutoff
+
+
+def _get_authority_items_for_sbu(articles: list, sbu: str, exclude_links: set) -> list:
+    """Port of the frontend's getAuthorityItemsForSBU: authority-sourced
+    items (authority query lens OR a detected client/authority), scoped to
+    this SBU, excluding anything already shown in the main events list for
+    the same SBU (fixes the duplicate-between-sections bug)."""
+    sbu_lower = sbu.lower()
+    items = []
+    for a in articles:
+        if not _within_lookback(a, DIGEST_AUTHORITY_LOOKBACK_DAYS):
+            continue
+        if a['link'] in exclude_links:
+            continue
+        has_authority_lens = a.get('search_query_type') in DIGEST_AUTHORITY_QUERY_TYPES
+        has_detected_authority = bool((a.get('detected_client_authority') or '').strip())
+        if not (has_authority_lens or has_detected_authority):
+            continue
+        sbus = [s.strip().lower() for s in (a.get('sbu_tagging') or '').split(',') if s.strip()]
+        if sbu_lower not in sbus:
+            continue
+        items.append(a)
+    items.sort(key=lambda a: (-(a.get('event_impact_score') or 0), -(a['date_obj'].toordinal() if a.get('date_obj') else 0)))
+    return get_deduped_event_list(items)[:DIGEST_AUTHORITY_MAX_ITEMS_PER_SBU]
+
+
+def _crisp_subsection_label(text: str) -> str:
+    return f'<div style="margin-top:16px;padding-top:12px;border-top:1px dashed #E5E2D0;font-size:11px;font-weight:700;color:#666666;text-transform:uppercase;letter-spacing:0.5px;">{text}</div>'
+
+
 def build_multi_sbu_crisp_html(recipient_name: str, articles_by_sbu: dict) -> str:
-    """Multi-SBU users (including admins): one section per SBU, bare-fact
-    bullets, no cap, high-impact only (already filtered upstream)."""
+    """Multi-SBU users (including admins): mirrors the SBU Storylines tab —
+    per-SBU sections, 14-day lookback, event_impact_score >= 120, deduped,
+    tier-aware sorted, capped at 6 events, plus each SBU's Client/Authority
+    Activity sub-section (90-day lookback, deduped against the main list)."""
     sections = ''
     for sbu, articles in articles_by_sbu.items():
-        rows = _crisp_bullet_rows(articles)
+        pool = [a for a in articles if _within_lookback(a, DIGEST_STORYLINE_LOOKBACK_DAYS)
+                and (a.get('event_impact_score') or 0) >= DIGEST_STORYLINE_MIN_IMPACT_SCORE]
+        pool.sort(key=_tier_aware_sort_key)
+        main_events = get_deduped_event_list(pool)[:DIGEST_STORYLINE_MAX_EVENTS_PER_SBU]
+        exclude_links = {a['link'] for a in main_events}
+        authority_items = _get_authority_items_for_sbu(articles, sbu, exclude_links)
+
+        rows = _crisp_bullet_rows(main_events)
         sections += _crisp_section_header(sbu)
         sections += f"""
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
-          {rows}
-        </table>"""
-    intro = "Here are this week's high-impact events across your business units."
-    return _crisp_email_shell(recipient_name, intro, sections)
-
-
-def build_single_sbu_category_crisp_html(recipient_name: str, sbu: str, articles: list) -> str:
-    """Single-SBU users: one section per category within their one SBU,
-    bare-fact bullets, no cap, high-impact only (already filtered upstream)."""
-    grouped = {}
-    for a in articles:
-        cat = (a.get('category') or 'general').lower()
-        grouped.setdefault(cat, []).append(a)
-
-    sections = ''
-    for cat, items in grouped.items():
-        rows = _crisp_bullet_rows(items)
-        sections += _crisp_section_header(cat)
-        sections += f"""
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
-          {rows}
-        </table>"""
-    if not sections:
-        sections = _crisp_section_header(sbu) + f"""
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E2D0;margin-bottom:32px;">
-          {_crisp_bullet_rows([])}
-        </table>"""
-    intro = f"Here are this week's high-impact {sbu} events."
-    return _crisp_email_shell(recipient_name, intro, sections)
+        <table width="100%" cellpadding="0" cellspacing="0" border="0"
 
 
 def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
@@ -1480,16 +1603,24 @@ def send_weekly_digest(token: str = ""):
         # categories) so the two surfaces never disagree on what counts as
         # "worth a CEO's time." No LLM call needed here — event_impact_score
         # and summary are already computed by the processor.
+        # Change (digest rework): pull a wide 90-day pool once, unfiltered by
+        # threshold/lookback — each builder below applies its OWN threshold
+        # and lookback to exactly match its corresponding dashboard tab
+        # (Executive Brief: 150 / 14 days; SBU Storylines: 120 / 14 days;
+        # authority sub-section: no threshold / 90 days). Filtering once in
+        # SQL with a single threshold/window was the root cause of the email
+        # not matching what the dashboard actually shows.
         cur.execute("""
             SELECT id, news_title, category_tag, sbu_tagging,
                    summary, link, published_date, competitor_tagging,
                    contract_value_inr_crore, geography, rank_score,
-                   event_impact_score, competitor_tier, "Source"
+                   event_impact_score, competitor_tier, "Source",
+                   cluster_id, is_representative_article, cluster_summary,
+                   cluster_article_count, search_query_type, detected_client_authority
             FROM processed_articles
-            WHERE published_date >= CURRENT_DATE - INTERVAL '7 days'
+            WHERE published_date >= CURRENT_DATE - INTERVAL '90 days'
               AND category_tag IS NOT NULL
               AND category_tag NOT IN ('stock market', 'industry trends', 'leadership/management')
-              AND COALESCE(event_impact_score, 0) >= 150
             ORDER BY event_impact_score DESC NULLS LAST,
                      rank_score DESC NULLS LAST, published_date DESC
         """)
@@ -1510,7 +1641,9 @@ def send_weekly_digest(token: str = ""):
                 'category': a.get('category_tag', ''),
                 'sbu_tagging': a.get('sbu_tagging', ''),
                 'summary': a.get('summary', ''),
+                'cluster_summary': a.get('cluster_summary', ''),
                 'link': a.get('link', '#'),
+                'date_obj': a.get('published_date'),
                 'date': a.get('published_date').isoformat() if a.get('published_date') else '',
                 'source': a.get('Source', ''),
                 'competitors': competitors,
@@ -1519,6 +1652,11 @@ def send_weekly_digest(token: str = ""):
                 'rank_score': a.get('rank_score') or 0,
                 'event_impact_score': a.get('event_impact_score') or 0,
                 'competitor_tier': a.get('competitor_tier'),
+                'cluster_id': a.get('cluster_id'),
+                'is_representative_article': a.get('is_representative_article'),
+                'cluster_article_count': a.get('cluster_article_count') or 1,
+                'search_query_type': a.get('search_query_type') or '',
+                'detected_client_authority': a.get('detected_client_authority') or '',
             })
 
         # ── Step 3: Send to each user ─────────────────────────────────────────
