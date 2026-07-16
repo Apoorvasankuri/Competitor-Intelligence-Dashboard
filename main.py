@@ -230,6 +230,7 @@ def get_all_data(representative_only: bool = False):
                 confidence_score,
                 sbu_fit_score
             FROM processed_articles
+            WHERE is_duplicate IS NOT TRUE
             ORDER BY 
                 CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
                 rank_score DESC,
@@ -2153,6 +2154,7 @@ def get_profile_data(token: str):
                     event_impact_score,
                     actionability_score, confidence_score, sbu_fit_score
                 FROM processed_articles
+                WHERE is_duplicate IS NOT TRUE
                 ORDER BY
                     CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
                     rank_score DESC, published_date DESC
@@ -2189,7 +2191,7 @@ def get_profile_data(token: str):
                     event_impact_score,
                     actionability_score, confidence_score, sbu_fit_score
                 FROM processed_articles
-                WHERE {conditions}
+                WHERE ({conditions}) AND is_duplicate IS NOT TRUE
                 ORDER BY 
                     CASE WHEN rank_score IS NULL THEN 1 ELSE 0 END,
                     rank_score DESC, published_date DESC
