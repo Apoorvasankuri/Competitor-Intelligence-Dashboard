@@ -18,6 +18,14 @@ import logging
 # Users who receive AI-generated BU summary digest instead of article digest
 SUMMARY_DIGEST_EMAILS = {'emmadis@kecrpg.com','sankuria@kecrpg.com','barfiwalav@kecrpg.com','Kejriwalv@kecrpg.com'}
 ALL_SBUS = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
+
+# SBUs suppressed from ALL digest emails (both the AI executive brief and the
+# category-wise article digest). Dashboard/API are unaffected.
+DIGEST_EXCLUDED_SBUS = {'intl t&d', 'international t&d'}
+
+def digest_sbus(sbu_list):
+    """Drop digest-excluded SBUs from a list of SBU names."""
+    return [s for s in sbu_list if s.strip().lower() not in DIGEST_EXCLUDED_SBUS]
 CMIE_SET_ID = os.environ.get("CMIE_SET_ID")
 CMIE_BATCH_ID = os.environ.get("CMIE_BATCH_ID")
 CMIE_DEFAULT_REPORTTYPE = os.environ.get("CMIE_DEFAULT_REPORTTYPE", "details")
@@ -1518,7 +1526,7 @@ def build_summary_digest_html(recipient_name: str, all_articles: list, sbu_alias
     DIGEST_EXCLUDED_SBUS = {'intl t&d'}
 
     sbu_sections = ''
-    for sbu in ALL_SBUS:
+    for sbu in digest_sbus(ALL_SBUS):
         if sbu.strip().lower() in DIGEST_EXCLUDED_SBUS:
             continue
         aliases = sbu_alias_map.get(sbu.lower(), [sbu.lower()])
@@ -1714,8 +1722,8 @@ def send_weekly_digest(token: str = ""):
 
             # Build articles_by_sbu dict
             if is_admin or sbu_profile == 'Admin':
-                # Admin sees all SBUs
-                sbus = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
+                # Admin sees all SBUs (minus digest-excluded ones)
+                sbus = digest_sbus(['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas'])
                 articles_by_sbu = {}
                 SBU_ALIAS_MAP = {
                     'intl t&d': ['intl t&d', 'international t&d'],
@@ -1747,7 +1755,7 @@ def send_weekly_digest(token: str = ""):
                     'oil & gas': ['oil & gas'],
                 }
 
-                sbus = [s.strip() for s in sbu_profile.split(',') if s.strip()]
+                sbus = digest_sbus([s.strip() for s in sbu_profile.split(',') if s.strip()])
                 articles_by_sbu = {}
                 for sbu in sbus:
                     aliases = SBU_ALIAS_MAP.get(sbu.lower(), [sbu.lower()])
@@ -2679,9 +2687,9 @@ def digest_preview(token: str = ""):
             is_admin = u.get('is_admin', False)
 
             if is_admin or sbu_profile == 'Admin':
-                sbus = ['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas']
+                sbus = digest_sbus(['Intl T&D', 'India T&D', 'Civil', 'Transportation', 'Renewables', 'Oil & Gas'])
             else:
-                sbus = [s.strip() for s in sbu_profile.split(',') if s.strip()]
+                sbus = digest_sbus([s.strip() for s in sbu_profile.split(',') if s.strip()])
 
             articles_by_sbu = {}
             for sbu in sbus:
