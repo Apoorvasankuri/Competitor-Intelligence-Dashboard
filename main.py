@@ -964,6 +964,8 @@ def group_articles_for_email(articles):
         cat = (a.get('category') or 'general').lower().strip()
         if cat in EXCLUDE_CATEGORIES:
             continue
+        if not _passes_value_floor(a):
+            continue
         if cat not in grouped:
             grouped[cat] = []
         grouped[cat].append(a)
@@ -1085,6 +1087,13 @@ def _crisp_bullet_rows(articles: list) -> str:
     rows = ''
     for idx, article in enumerate(articles):
         summary = article.get('summary', '') or article.get('title', '')
+        # Keep only the first sentence. Rows summarised before the
+        # one-sentence prompt change in llm_processor_production.py still
+        # carry a trailing explanatory/implication sentence, dropped here
+        # at render time so it never reaches the live digest.
+        _sentences = re.split(r'(?<=[.!?])\s+', summary.strip())
+        if len(_sentences) > 1:
+            summary = _sentences[0]
         competitors = article.get('competitors', [])
         for c in sorted(competitors, key=len, reverse=True):
             if c and c != '-':
@@ -1193,6 +1202,15 @@ DIGEST_AUTHORITY_LOOKBACK_DAYS = 90
 DIGEST_AUTHORITY_MAX_ITEMS_PER_SBU = 3
 DIGEST_AUTHORITY_QUERY_TYPES = {'site_client_authority', 'site_government_policy'}
 
+# Digest-only floor: articles with a STATED order value under this are
+# dropped from every digest email. Articles with NO value at all (None)
+# pass through untouched — this only removes cases where a number IS
+# present and it's small. Dashboard/API are unaffected.
+DIGEST_MIN_ORDER_VALUE_CR = 100
+
+def _passes_value_floor(article: dict) -> bool:
+    cv = article.get('contract_value')
+    return not (cv is not None and cv < DIGEST_MIN_ORDER_VALUE_CR)
 
 def _within_lookback(article: dict, days: int) -> bool:
     d = article.get('date_obj')
@@ -1222,6 +1240,8 @@ def _get_authority_items_for_sbu(articles: list, sbu: str, exclude_links: set) -
         sbus = [s.strip().lower() for s in (a.get('sbu_tagging') or '').split(',') if s.strip()]
         if sbu_lower not in sbus:
             continue
+        if not _passes_value_floor(a):
+            continue
         items.append(a)
     items.sort(key=lambda a: (-(a.get('event_impact_score') or 0), -(a['date_obj'].toordinal() if a.get('date_obj') else 0)))
     return get_deduped_event_list(items)[:DIGEST_AUTHORITY_MAX_ITEMS_PER_SBU]
@@ -1239,7 +1259,8 @@ def build_multi_sbu_crisp_html(recipient_name: str, articles_by_sbu: dict) -> st
     sections = ''
     for sbu, articles in articles_by_sbu.items():
         pool = [a for a in articles if _within_lookback(a, DIGEST_STORYLINE_LOOKBACK_DAYS)
-                and (a.get('event_impact_score') or 0) >= DIGEST_STORYLINE_MIN_IMPACT_SCORE]
+                and (a.get('event_impact_score') or 0) >= DIGEST_STORYLINE_MIN_IMPACT_SCORE
+                and _passes_value_floor(a)]
         pool.sort(key=_tier_aware_sort_key)
         main_events = get_deduped_event_list(pool)[:DIGEST_STORYLINE_MAX_EVENTS_PER_SBU]
         exclude_links = {a['link'] for a in main_events}
@@ -1268,7 +1289,8 @@ def build_single_sbu_category_crisp_html(recipient_name: str, sbu: str, articles
     one SBU — 14-day lookback, event_impact_score >= 150, deduped,
     tier-aware sorted, capped at 5 events per category."""
     pool = [a for a in articles if _within_lookback(a, DIGEST_BRIEF_LOOKBACK_DAYS)
-            and (a.get('event_impact_score') or 0) >= DIGEST_BRIEF_MIN_IMPACT_SCORE]
+            and (a.get('event_impact_score') or 0) >= DIGEST_BRIEF_MIN_IMPACT_SCORE
+            and _passes_value_floor(a)]
 
     grouped = {}
     for a in pool:
