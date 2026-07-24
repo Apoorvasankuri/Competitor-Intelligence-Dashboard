@@ -1455,21 +1455,21 @@ def generate_bu_summary(sbu: str, articles: list) -> str:
         )
 
     
-    prompt = f"""You are a competitive intelligence analyst at KEC International.
+    prompt = f"""You are a factual data extraction tool for KEC International.
 
-Below are this week's intelligence articles for the {sbu} business unit. Convert each distinct news item into a bullet point.
+Below are this week's intelligence articles for the {sbu} business unit. Output one factual bullet per distinct news item.
 
-Format
-- Competitor did X for Y project — ₹Z Cr / Geography.
-- Next competitor did A for B — ₹C Cr / Geography.
+Format — exactly this shape, nothing more:
+- Company — what they won or did — project or scope — ₹X Cr — Geography.
 
 Strict rules:
-1. One bullet per distinct news item. Do not merge multiple articles into one bullet.
-2. Every bullet MUST be a complete sentence. Never end mid-word or mid-sentence.
-3. Include ₹ value and geography in every bullet where the data provides it.
-4. Do NOT add any introduction, heading, summary, or closing line. Start directly with the first bullet.
-5. Do NOT add strategic commentary like "this threatens KEC" or "KEC should watch".
-6. If an article lacks enough detail for a meaningful bullet, skip it silently.
+1. One bullet per distinct news item. Never merge two items into one bullet.
+2. FACTS ONLY. No implications, no analysis, no interpretation, no outlook, no context.
+3. Banned words: signals, indicates, suggests, highlights, underscores, positions, reinforces, strengthens, amid, marking, reflecting, demonstrating, notably, significantly.
+4. Maximum 18 words per bullet. Shorter is better. Drop all adjectives.
+5. State ₹ value and geography ONLY if the article gives them. Never estimate, infer, or approximate.
+6. No introduction, no heading, no closing line, no summary sentence. Start directly with the first bullet.
+7. If an article has no concrete company plus action, skip it silently.
 
 Articles:
 {article_text}
@@ -1494,7 +1494,7 @@ Bullets:"""
                         parts=[types.Part(text=prompt)]
                     )],
                     config=types.GenerateContentConfig(
-                        temperature=0.3,
+                        temperature=0.1,
                         max_output_tokens=5000,
                     )
                 )
@@ -1514,25 +1514,22 @@ Bullets:"""
 def build_summary_digest_html(recipient_name: str, all_articles: list, sbu_alias_map: dict) -> str:
     """Build the executive AI-summary email for senior leadership"""
 
+    # SBUs excluded from the executive digest email only (still visible in dashboard)
+    DIGEST_EXCLUDED_SBUS = {'intl t&d'}
+
     sbu_sections = ''
     for sbu in ALL_SBUS:
+        if sbu.strip().lower() in DIGEST_EXCLUDED_SBUS:
+            continue
         aliases = sbu_alias_map.get(sbu.lower(), [sbu.lower()])
         sbu_articles = [
             a for a in all_articles
             if any(alias in (a.get('sbu_tagging') or '').lower() for alias in aliases)
         ]
 
-        MANUAL_OVERRIDES = {
-            'Intl T&D': '• L&T won $992M energy infrastructure development contracts in Kuwait.',
-            'India T&D': '• Texmaco Rail & Engineering Ltd received orders worth ₹11.65 Cr from Odisha Power Transmission.<br>• HG Infra Engineering received LOI from REC Power for Jharkhand transmission project.<br>• Tata Power received LOI from RECPDCL for development of 250-km transmission network across Karnataka, featuring 400 kV double-circuit lines, 220 kV lines and 220 kV underground cable systems.',
-        }
-
-        if sbu in MANUAL_OVERRIDES:
-            summary_text = MANUAL_OVERRIDES[sbu]
-        else:
-            sbu_articles = deduplicate_articles(sbu_articles)
-            summary_text = generate_bu_summary(sbu, sbu_articles)
-            summary_text = summary_text.replace('*', '•').replace('\n', '<br>')
+        sbu_articles = deduplicate_articles(sbu_articles)
+        summary_text = generate_bu_summary(sbu, sbu_articles)
+        summary_text = summary_text.replace('*', '•').replace('\n', '<br>')
         article_count = len(sbu_articles)
 
         sbu_sections += f"""
@@ -1575,7 +1572,7 @@ def build_summary_digest_html(recipient_name: str, all_articles: list, sbu_alias
             <td style="background:#FFFFFF;padding:32px;">
               <p style="margin:0 0 6px;font-size:15px;color:#333333;font-family:Arial,sans-serif;">Hi <strong>{recipient_name}</strong>,</p>
               <p style="margin:0 0 28px;font-size:14px;color:#666666;line-height:1.6;font-family:Arial,sans-serif;">
-                Here is your weekly executive summary of competitor activity across all six business units.
+                Here is your weekly executive summary of competitor activity across your business units.
                 Each section reflects the most significant developments from this week's intelligence database.
               </p>
 
