@@ -1313,6 +1313,13 @@ def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
             for idx, article in enumerate(items):
                 title = article.get('title', '')
                 summary = article.get('summary', '') or title
+                # Keep only the first sentence. Rows summarised before the
+                # one-sentence prompt change in llm_processor_production.py
+                # still carry a trailing explanatory sentence ("The partnership
+                # involves leveraging..."), which this drops at render time.
+                _sentences = re.split(r'(?<=[.!?])\s+', summary.strip())
+                if len(_sentences) > 1:
+                    summary = _sentences[0]
                 link = article.get('link', '#')
                 date = article.get('date', '')
                 source = article.get('source', '')
