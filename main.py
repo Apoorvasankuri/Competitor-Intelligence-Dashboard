@@ -1110,15 +1110,11 @@ def _crisp_bullet_rows(articles: list) -> str:
 
         border_top = 'border-top:1px solid #E5E2D0;' if idx > 0 else ''
 
-        rows += f"""
+                rows += f"""
         <tr>
           <td style="padding:14px 16px;{border_top}background:#FFFFFF;">
-            <p style="margin:0;font-size:14px;color:#333333;line-height:1.7;font-family:Arial,sans-serif;">{summary}</p>
+            <p style="margin:0;font-size:14px;color:#333333;line-height:1.7;font-family:Arial,sans-serif;">{summary} <span style="font-size:12px;color:#666666;white-space:nowrap;">{fd}&nbsp;&nbsp;<a href="{article.get('link', '#')}" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">Open →</a></span></p>
             {value_line}
-            <p style="margin:6px 0 0 0;font-size:12px;color:#666666;font-family:Arial,sans-serif;">
-              {fd}
-              &nbsp;&nbsp;<a href="{article.get('link', '#')}" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">Open →</a>
-            </p>
           </td>
         </tr>"""
     return rows
@@ -1368,14 +1364,10 @@ def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
                 if competitor_text:
                     meta_line += f'  ·  {competitor_text}'
 
-                content += f"""
+                                content += f"""
                 <tr>
                   <td style="padding:14px 16px;{border_top}background:#FFFFFF;">
-                    <p style="margin:0 0 6px 0;font-size:14px;color:#333333;line-height:1.7;font-family:Arial,sans-serif;">{summary}</p>
-                    <p style="margin:0;font-size:12px;color:#666666;font-family:Arial,sans-serif;">
-                      {meta_line}
-                      &nbsp;&nbsp;<a href="{link}" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">Read more →</a>
-                    </p>
+                    <p style="margin:0;font-size:14px;color:#333333;line-height:1.7;font-family:Arial,sans-serif;">{summary} <span style="font-size:12px;color:#666666;white-space:nowrap;">{meta_line}&nbsp;&nbsp;<a href="{link}" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">Read more →</a></span></p>
                   </td>
                 </tr>"""
 
