@@ -1026,14 +1026,12 @@ def _jaccard_similarity(text1: str, text2: str) -> float:
 
 
 def _dedupe_similar_articles(articles: list) -> list:
-    """Port of the frontend's dedupeSimilarArticles Jaccard fallback, for
-    articles with no cluster_id to group by."""
+    """Deduplicates by Jaccard similarity across ALL articles.
+    _get_executive_cluster_list already picks one representative per cluster_id;
+    this pass then catches cross-cluster duplicates (same story, different cluster_ids)
+    as well as unclustered near-duplicates."""
     kept = []
     for article in articles:
-        has_cluster = article.get('cluster_id') not in (None, '')
-        if has_cluster:
-            kept.append(article)
-            continue
         is_duplicate = False
         for k in kept:
             summary1 = article.get('summary') or article.get('title') or ''
@@ -1251,16 +1249,31 @@ def build_multi_sbu_crisp_html(recipient_name: str, articles_by_sbu: dict) -> st
     """Multi-SBU users (including admins): mirrors the SBU Storylines tab —
     per-SBU sections, 14-day lookback, event_impact_score >= 120, deduped,
     tier-aware sorted, capped at 6 events, plus each SBU's Client/Authority
-    Activity sub-section (90-day lookback, deduped against the main list)."""
+    Activity sub-section (90-day lookback, deduped against the main list).
+    Cross-SBU dedup: articles already shown in an earlier SBU section are
+    excluded from later sections (matched by link or cluster_id)."""
     sections = ''
+    shown_links: set = set()
+    shown_cluster_ids: set = set()
     for sbu, articles in articles_by_sbu.items():
-        pool = [a for a in articles if _within_lookback(a, DIGEST_STORYLINE_LOOKBACK_DAYS)
+        unseen = [a for a in articles
+                  if a.get('link') not in shown_links
+                  and (not a.get('cluster_id') or a['cluster_id'] not in shown_cluster_ids)]
+        pool = [a for a in unseen if _within_lookback(a, DIGEST_STORYLINE_LOOKBACK_DAYS)
                 and (a.get('event_impact_score') or 0) >= DIGEST_STORYLINE_MIN_IMPACT_SCORE
                 and _passes_value_floor(a)]
         pool.sort(key=_tier_aware_sort_key)
         main_events = get_deduped_event_list(pool)[:DIGEST_STORYLINE_MAX_EVENTS_PER_SBU]
+        for a in main_events:
+            shown_links.add(a.get('link', ''))
+            if a.get('cluster_id'):
+                shown_cluster_ids.add(a['cluster_id'])
         exclude_links = {a['link'] for a in main_events}
-        authority_items = _get_authority_items_for_sbu(articles, sbu, exclude_links)
+        authority_items = _get_authority_items_for_sbu(unseen, sbu, exclude_links)
+        for a in authority_items:
+            shown_links.add(a.get('link', ''))
+            if a.get('cluster_id'):
+                shown_cluster_ids.add(a['cluster_id'])
 
         rows = _crisp_bullet_rows(main_events)
         sections += _crisp_section_header(sbu)
