@@ -1108,7 +1108,7 @@ def _crisp_bullet_rows(articles: list) -> str:
 
         border_top = 'border-top:1px solid #E5E2D0;' if idx > 0 else ''
 
-                rows += f"""
+        rows += f"""
         <tr>
           <td style="padding:14px 16px;{border_top}background:#FFFFFF;">
             <p style="margin:0;font-size:14px;color:#333333;line-height:1.7;font-family:Arial,sans-serif;">{summary} <span style="font-size:12px;color:#666666;white-space:nowrap;">{fd}&nbsp;&nbsp;<a href="{article.get('link', '#')}" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">Open →</a></span></p>
