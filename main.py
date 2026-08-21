@@ -1377,7 +1377,7 @@ def build_email_html(recipient_name: str, articles_by_sbu: dict) -> str:
                 if competitor_text:
                     meta_line += f'  ·  {competitor_text}'
 
-                                content += f"""
+                content += f"""
                 <tr>
                   <td style="padding:14px 16px;{border_top}background:#FFFFFF;">
                     <p style="margin:0;font-size:14px;color:#333333;line-height:1.7;font-family:Arial,sans-serif;">{summary} <span style="font-size:12px;color:#666666;white-space:nowrap;">{meta_line}&nbsp;&nbsp;<a href="{link}" style="color:#2E6EB5;font-weight:bold;text-decoration:none;">Read more →</a></span></p>
