@@ -3420,3 +3420,30 @@ def cmie_export(
                 conn.close()
             except Exception:
                 pass
+
+            # ─── CMIE CapEx: Raw Meta Diagnostic ───────────────────────────────────────────
+# Appended block. Does not modify any existing endpoint, table, or import above.
+# One-off diagnostic: returns CMIE's raw "meta" object for a given batch/set
+# call, so we can see exactly what fields CMIE's live API actually returns
+# (their docs may not list every field). Does NOT write to the database --
+# read-only, safe to call as many times as needed.
+
+@app.get("/api/admin/cmie/raw-meta")
+def cmie_raw_meta(token: str, batchid: str = None, setid: str = None, reporttype: str = "details"):
+    """Admin only. Returns CMIE's raw meta object for a batch/set call, unmodified."""
+    user = get_user_from_token(token)
+    if not user or not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if not batchid and not setid:
+        raise HTTPException(status_code=400, detail="Provide batchid or setid")
+
+    try:
+        raw_data = call_cmie_api(batchid=batchid, setid=setid, reporttype=reporttype)
+        return {
+            "status": "success",
+            "meta": raw_data.get("meta") if isinstance(raw_data, dict) else None,
+            "top_level_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else None,
+        }
+    except CmieApiError as e:
+        raise HTTPException(status_code=502, detail=str(e))
