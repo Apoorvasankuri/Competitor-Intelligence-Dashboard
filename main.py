@@ -3299,3 +3299,124 @@ def cmie_civil_highlights(
                 conn.close()
             except Exception:
                 pass
+
+# ─── CMIE CapEx: CSV/Excel Export ──────────────────────────────────────────────
+# Appended block. Does not modify any existing endpoint, table, or import above.
+# Reuses csv, io, StreamingResponse -- already imported at the top of main.py
+# for the existing /api/export-csv endpoint, so no new imports needed here.
+#
+# Downloads a filtered slice of cmie_projects as a CSV file (opens directly
+# in Excel -- no separate .xlsx library needed, same pattern as your
+# existing article export).
+#
+# Defaults match the Telangana/Andhra Pradesh/Karnataka/Tamil Nadu/Kerala +
+# "construction" request, but every filter is overridable via query params:
+#   /api/cmie/export?token=...                                   -> defaults
+#   /api/cmie/export?token=...&states=Gujarat,Maharashtra         -> different states
+#   /api/cmie/export?token=...&industry=                          -> no industry filter (all industries)
+#   /api/cmie/export?token=...&states=                            -> no state filter (all states)
+
+CMIE_EXPORT_DEFAULT_STATES = ["Telangana", "Andhra Pradesh", "Karnataka", "Tamil Nadu", "Kerala"]
+CMIE_EXPORT_DEFAULT_INDUSTRY = "construction"
+
+
+@app.get("/api/cmie/export")
+def cmie_export(
+    token: str,
+    states: str = None,
+    industry: str = None,
+    status: str = None,
+):
+    """
+    Civil/Admin only. Downloads a CSV of cmie_projects filtered by state(s)
+    and/or an industry substring match.
+
+    - states: comma-separated list, e.g. "Telangana,Karnataka". Exact match
+      per state (matches CMIE's "Location state" values as stored). Empty
+      string ("states=") means no state filter -- all states.
+    - industry: substring match (case-insensitive), e.g. "construction"
+      matches "Housing construction", "Road construction", etc. Empty
+      string ("industry=") means no industry filter -- all industries.
+    - status: optional exact match on project_status (e.g. "Under Implementation").
+    """
+    require_cmie_access(token)
+
+    conn = None
+    try:
+        # Distinguish "not passed at all" (use defaults) from "passed empty"
+        # (explicitly no filter) using None vs "".
+        if states is None:
+            state_list = CMIE_EXPORT_DEFAULT_STATES
+        elif states == "":
+            state_list = []
+        else:
+            state_list = [s.strip() for s in states.split(",") if s.strip()]
+
+        if industry is None:
+            industry_filter = CMIE_EXPORT_DEFAULT_INDUSTRY
+        else:
+            industry_filter = industry.strip()
+
+        where_clauses = []
+        params = []
+
+        if state_list:
+            where_clauses.append("state = ANY(%s)")
+            params.append(state_list)
+        if industry_filter:
+            where_clauses.append("industry ILIKE %s")
+            params.append(f"%{industry_filter}%")
+        if status:
+            where_clauses.append("project_status = %s")
+            params.append(status)
+
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT cmie_project_id, project_name, promoter_name, project_cost,
+                   project_status, industry, sector, ownership, state, district,
+                   location, expected_completion, latest_event_date, latest_event,
+                   last_synced_at
+            FROM cmie_projects
+            {where_sql}
+            ORDER BY state, project_cost DESC NULLS LAST
+        """, params)
+        rows = cur.fetchall()
+        cur.close()
+
+        output = io.StringIO()
+        fieldnames = [
+            "cmie_project_id", "project_name", "promoter_name", "project_cost",
+            "project_status", "industry", "sector", "ownership", "state", "district",
+            "location", "expected_completion", "latest_event_date", "latest_event",
+            "last_synced_at",
+        ]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({
+                k: (row.get(k).isoformat() if hasattr(row.get(k), "isoformat") else row.get(k))
+                for k in fieldnames
+            })
+        output.seek(0)
+
+        state_label = "-".join(state_list) if state_list else "AllStates"
+        filename = f"cmie_export_{state_label}_{datetime.now().strftime('%Y%m%d')}.csv"
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
