@@ -3447,3 +3447,251 @@ def cmie_raw_meta(token: str, batchid: str = None, setid: str = None, reporttype
         }
     except CmieApiError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# ─── CMIE CapEx: Segment + Region tagging and "sync all" (Step 3) ─────────────
+# Appended block. Does not modify any existing endpoint above.
+#
+# - Adds `segment` and `region` columns to cmie_projects (safe to re-run).
+# - Syncs every KEC batch in CMIE_KEC_BATCHES one after another and tags the
+#   projects each batch brought in with that batch's segment + region.
+# - Water (batch 1275) is not split by region, so its region comes from the
+#   project's state via CMIE_STATE_TO_REGION.
+# - Runs in a background thread, so the request returns immediately.
+#   Check progress with GET /api/admin/cmie/sync-all/status.
+
+import threading as _cx_threading
+
+# batch_id -> (segment, region). region None = derive from project state.
+CMIE_KEC_BATCHES = {
+    # Industrial
+    "1302": ("Industrial", "North"),
+    "1303": ("Industrial", "West"),
+    "1304": ("Industrial", "South"),
+    "1305": ("Industrial", "East"),
+    "1306": ("Industrial", "Central"),
+    "1307": ("Industrial", "North-East"),
+    "1308": ("Industrial", "Multi-state / Unallocated"),
+    # Commercial
+    "1285": ("Commercial", "North"),
+    "1286": ("Commercial", "West"),
+    "1287": ("Commercial", "South"),
+    "1288": ("Commercial", "East"),
+    "1289": ("Commercial", "Central"),
+    "1309": ("Commercial", "North-East"),
+    "1292": ("Commercial", "Multi-state / Unallocated"),
+    # Residential (1300 = Multi-state, currently 0 projects -> not synced)
+    "1293": ("Residential", "North"),
+    "1294": ("Residential", "West"),
+    "1295": ("Residential", "West"),
+    "1296": ("Residential", "South"),
+    "1301": ("Residential", "East"),
+    "1298": ("Residential", "Central"),
+    "1299": ("Residential", "North-East"),
+    # Transport
+    "1277": ("Transport", "North"),
+    "1278": ("Transport", "West"),
+    "1280": ("Transport", "South"),
+    "1281": ("Transport", "East"),
+    "1282": ("Transport", "Central"),
+    "1283": ("Transport", "North-East"),
+    "1284": ("Transport", "Multi-state / Unallocated"),
+    # Water (not split by region)
+    "1275": ("Water", None),
+}
+
+CMIE_SEGMENTS = ["Industrial", "Commercial", "Residential", "Transport", "Water"]
+CMIE_REGIONS = ["North", "West", "South", "East", "Central", "North-East",
+                "Multi-state / Unallocated"]
+
+# Used only for Water. Keys are lower-case CMIE state names.
+CMIE_STATE_TO_REGION = {
+    # North
+    "nct of delhi": "North", "delhi": "North", "haryana": "North", "punjab": "North",
+    "himachal pradesh": "North", "jammu & kashmir": "North", "jammu and kashmir": "North",
+    "ladakh": "North", "uttarakhand": "North", "uttar pradesh": "North",
+    "chandigarh": "North", "rajasthan": "North",
+    # West
+    "maharashtra": "West", "gujarat": "West", "goa": "West",
+    "dadra & nagar haveli and daman & diu": "West",
+    "dadra and nagar haveli and daman and diu": "West",
+    # South
+    "andhra pradesh": "South", "telangana": "South", "karnataka": "South",
+    "tamil nadu": "South", "kerala": "South", "puducherry": "South", "lakshadweep": "South",
+    # East
+    "west bengal": "East", "odisha": "East", "bihar": "East", "jharkhand": "East",
+    "andaman & nicobar": "East", "andaman & nicobar islands": "East",
+    "andaman and nicobar islands": "East",
+    # Central
+    "madhya pradesh": "Central", "chhattisgarh": "Central",
+    # North-East
+    "assam": "North-East", "arunachal pradesh": "North-East", "manipur": "North-East",
+    "meghalaya": "North-East", "mizoram": "North-East", "nagaland": "North-East",
+    "tripura": "North-East", "sikkim": "North-East",
+    # Multi-state / unallocated
+    "multi states": "Multi-state / Unallocated", "multi state": "Multi-state / Unallocated",
+    "unallocated": "Multi-state / Unallocated",
+}
+
+
+def cmie_region_from_state(state):
+    if not state:
+        return "Multi-state / Unallocated"
+    return CMIE_STATE_TO_REGION.get(str(state).strip().lower(), "Multi-state / Unallocated")
+
+
+def ensure_cmie_segment_columns():
+    """Adds segment/region columns + indexes if missing. Safe to call repeatedly."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE cmie_projects ADD COLUMN IF NOT EXISTS segment TEXT")
+        cur.execute("ALTER TABLE cmie_projects ADD COLUMN IF NOT EXISTS region TEXT")
+        cur.execute("ALTER TABLE cmie_projects ADD COLUMN IF NOT EXISTS source_batchid TEXT")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cmie_projects_segment ON cmie_projects (segment)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_cmie_projects_region ON cmie_projects (region)")
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logging.getLogger("cmie.segments").warning("ensure_cmie_segment_columns failed: %s", e)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# Run once when the app starts.
+ensure_cmie_segment_columns()
+
+
+def _cmie_tag_batch(batchid, segment, region, since):
+    """
+    Tags every project touched by the batch that just synced.
+    'since' = MAX(last_synced_at) before this batch ran, so only rows the
+    sync just wrote (last_synced_at > since) are tagged. Returns rows tagged.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        where = "WHERE last_synced_at > %s" if since is not None else ""
+        params = [since] if since is not None else []
+
+        if region is not None:
+            cur.execute(
+                f"UPDATE cmie_projects SET segment = %s, region = %s, source_batchid = %s {where}",
+                [segment, region, batchid] + params,
+            )
+            tagged = cur.rowcount
+        else:
+            # Water: region from each project's state
+            cur.execute(f"SELECT id, state FROM cmie_projects {where}", params)
+            rows = cur.fetchall()
+            for r in rows:
+                cur.execute(
+                    "UPDATE cmie_projects SET segment = %s, region = %s, source_batchid = %s WHERE id = %s",
+                    [segment, cmie_region_from_state(r.get("state")), batchid, r.get("id")],
+                )
+            tagged = len(rows)
+
+        conn.commit()
+        cur.close()
+        return tagged
+    finally:
+        conn.close()
+
+
+def _cmie_max_synced_at():
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(last_synced_at) AS m FROM cmie_projects")
+        row = cur.fetchone()
+        cur.close()
+        return row["m"] if row else None
+    finally:
+        conn.close()
+
+
+_cmie_sync_all_state = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "current_batch": None,
+    "done": 0,
+    "total": len(CMIE_KEC_BATCHES),
+    "results": [],
+}
+_cmie_sync_all_lock = _cx_threading.Lock()
+
+
+def _cmie_sync_all_worker(reporttype):
+    st = _cmie_sync_all_state
+    try:
+        ensure_cmie_segment_columns()
+        for batchid, (segment, region) in CMIE_KEC_BATCHES.items():
+            st["current_batch"] = batchid
+            entry = {"batchid": batchid, "segment": segment, "region": region or "by state"}
+            try:
+                since = _cmie_max_synced_at()
+                result = sync_cmie_projects(setid=None, batchid=batchid, reporttype=reporttype)
+                entry["status"] = result.get("status")
+                entry["records_in"] = result.get("records_in")
+                entry["records_upserted"] = result.get("records_upserted")
+                if result.get("status") == "success":
+                    entry["tagged"] = _cmie_tag_batch(batchid, segment, region, since)
+                    # Sanity check: every upserted row should have been tagged
+                    if entry["records_upserted"] is not None and entry["tagged"] != entry["records_upserted"]:
+                        entry["warning"] = "tagged count differs from records_upserted"
+                else:
+                    entry["error"] = result.get("error_message")
+            except Exception as e:
+                entry["status"] = "failed"
+                entry["error"] = str(e)
+            st["results"].append(entry)
+            st["done"] += 1
+    finally:
+        st["running"] = False
+        st["current_batch"] = None
+        st["finished_at"] = datetime.utcnow().isoformat()
+
+
+@app.post("/api/admin/cmie/sync-all")
+def cmie_admin_sync_all(token: str, reporttype: str = None):
+    """Admin only. Syncs all KEC segment/region batches in the background."""
+    user = get_user_from_token(token)
+    if not user or not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    with _cmie_sync_all_lock:
+        if _cmie_sync_all_state["running"]:
+            raise HTTPException(status_code=409, detail="A sync-all is already running")
+        _cmie_sync_all_state.update({
+            "running": True,
+            "started_at": datetime.utcnow().isoformat(),
+            "finished_at": None,
+            "current_batch": None,
+            "done": 0,
+            "total": len(CMIE_KEC_BATCHES),
+            "results": [],
+        })
+
+    t = _cx_threading.Thread(
+        target=_cmie_sync_all_worker,
+        args=(reporttype or CMIE_DEFAULT_REPORTTYPE,),
+        daemon=True,
+    )
+    t.start()
+    return {"status": "started", "total_batches": len(CMIE_KEC_BATCHES),
+            "check_progress": "/api/admin/cmie/sync-all/status"}
+
+
+@app.get("/api/admin/cmie/sync-all/status")
+def cmie_admin_sync_all_status(token: str):
+    """Admin only. Progress/results of the latest sync-all run."""
+    user = get_user_from_token(token)
+    if not user or not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return _cmie_sync_all_state
