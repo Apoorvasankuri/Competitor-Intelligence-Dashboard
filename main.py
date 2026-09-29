@@ -3741,3 +3741,56 @@ def cmie_admin_sync_all_status(token: str):
     if not user or not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return _cmie_sync_all_state
+
+
+    # ─── CMIE CapEx: purge projects not in any KEC segment batch (Step 6) ─────────
+# Appended block. Admin only.
+# dry_run=true (default) only COUNTS the untagged projects; nothing is deleted.
+# dry_run=false deletes them. Refuses to run while a sync-all is in progress.
+
+@app.post("/api/admin/cmie/purge-untagged")
+def cmie_admin_purge_untagged(token: str, dry_run: bool = True):
+    user = get_user_from_token(token)
+    if not user or not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if _cmie_sync_all_state.get("running"):
+        raise HTTPException(status_code=409, detail="Sync-all is running; try again when it finishes")
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS c FROM cmie_projects WHERE segment IS NULL")
+        untagged = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(*) AS c FROM cmie_projects WHERE segment IS NOT NULL")
+        tagged = cur.fetchone()["c"]
+
+        deleted = 0
+        if not dry_run:
+            cur.execute("DELETE FROM cmie_projects WHERE segment IS NULL")
+            deleted = cur.rowcount
+            conn.commit()
+        cur.close()
+
+        return {
+            "status": "success",
+            "dry_run": dry_run,
+            "tagged_projects": tagged,
+            "untagged_projects": untagged,
+            "deleted": deleted,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
