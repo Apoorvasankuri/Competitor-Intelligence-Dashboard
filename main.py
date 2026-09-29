@@ -2855,65 +2855,108 @@ def require_cmie_access(token: str):
 
     raise HTTPException(status_code=403, detail="Civil SBU access required")
 
+def _cmie_segment_region_filter(segment: str = None, region: str = None):
+    """Builds WHERE clauses for the Segment / Region filters. Empty or "All" = no filter."""
+    clauses, params = [], []
+    if segment and segment.strip().lower() != "all":
+        clauses.append("segment = %s")
+        params.append(segment.strip())
+    if region and region.strip().lower() != "all":
+        clauses.append("region = %s")
+        params.append(region.strip())
+    return clauses, params
 
 @app.get("/api/cmie/summary")
-def cmie_summary(token: str):
-    """Civil/Admin only. High-level CMIE CapEx dashboard summary."""
+def cmie_summary(token: str, segment: str = None, region: str = None):
+    """Civil/Admin only. CMIE CapEx dashboard summary, filtered by segment/region."""
     require_cmie_access(token)
 
     conn = None
     try:
+        clauses, params = _cmie_segment_region_filter(segment, region)
+        where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        and_sql = (" AND " + " AND ".join(clauses)) if clauses else ""
+
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute("SELECT COUNT(*) AS c FROM cmie_projects")
-        total_projects = cur.fetchone()["c"]
+        # KPI 1 + 2: number of projects, total investment
+        cur.execute(f"""
+            SELECT COUNT(*) AS c, COALESCE(SUM(project_cost), 0) AS s
+            FROM cmie_projects {where_sql}
+        """, params)
+        row = cur.fetchone()
+        total_projects = row["c"]
+        total_project_cost = safe_float(row["s"])
 
-        cur.execute("SELECT COALESCE(SUM(project_cost), 0) AS s FROM cmie_projects")
-        total_project_cost = safe_float(cur.fetchone()["s"])
+        # KPI 3: under implementation (exact CMIE status)
+        cur.execute(f"""
+            SELECT COUNT(*) AS c FROM cmie_projects
+            WHERE lower(trim(project_status)) = 'under implementation' {and_sql}
+        """, params)
+        under_implementation = cur.fetchone()["c"]
 
-        cur.execute("""
+        # KPI 4: announced (exact CMIE status)
+        cur.execute(f"""
+            SELECT COUNT(*) AS c FROM cmie_projects
+            WHERE lower(trim(project_status)) = 'announced' {and_sql}
+        """, params)
+        announced = cur.fetchone()["c"]
+
+        # Kept for backward compatibility with the old KPI card
+        cur.execute(f"""
             SELECT COUNT(*) AS c FROM cmie_projects
             WHERE project_status IS NOT NULL
             AND lower(project_status) NOT IN ('completed', 'closed', 'shelved', 'abandoned')
-        """)
+            {and_sql}
+        """, params)
         active_projects = cur.fetchone()["c"]
 
-        cur.execute("SELECT MAX(last_synced_at) AS m FROM cmie_projects")
-        recently_synced_row = cur.fetchone()
-        recently_synced_at = (
-            recently_synced_row["m"].isoformat() if recently_synced_row and recently_synced_row["m"] else None
-        )
+        cur.execute(f"SELECT MAX(last_synced_at) AS m FROM cmie_projects {where_sql}", params)
+        m = cur.fetchone()["m"]
+        recently_synced_at = m.isoformat() if m else None
 
-        cur.execute("""
-            SELECT COALESCE(project_status, 'Unknown') AS key, COUNT(*) AS c
-            FROM cmie_projects GROUP BY project_status ORDER BY c DESC
-        """)
-        by_status = {r["key"]: r["c"] for r in cur.fetchall()}
+        def breakdown(col):
+            cur.execute(f"""
+                SELECT COALESCE({col}, 'Unknown') AS key,
+                       COUNT(*) AS c,
+                       COALESCE(SUM(project_cost), 0) AS s
+                FROM cmie_projects {where_sql}
+                GROUP BY COALESCE({col}, 'Unknown')
+                ORDER BY c DESC
+            """, params)
+            rows = cur.fetchall()
+            counts = {r["key"]: r["c"] for r in rows}
+            costs = {r["key"]: safe_float(r["s"]) for r in rows}
+            return counts, costs
 
-        cur.execute("""
-            SELECT COALESCE(state, 'Unknown') AS key, COUNT(*) AS c
-            FROM cmie_projects GROUP BY state ORDER BY c DESC
-        """)
-        by_state = {r["key"]: r["c"] for r in cur.fetchall()}
-
-        cur.execute("""
-            SELECT COALESCE(industry, 'Unknown') AS key, COUNT(*) AS c
-            FROM cmie_projects GROUP BY industry ORDER BY c DESC
-        """)
-        by_industry = {r["key"]: r["c"] for r in cur.fetchall()}
+        by_status, _ = breakdown("project_status")
+        by_state, by_state_cost = breakdown("state")
+        by_industry, _ = breakdown("industry")
+        by_segment, by_segment_cost = breakdown("segment")
+        by_region, by_region_cost = breakdown("region")
 
         cur.close()
 
         return {
             "status": "success",
+            "filters": {"segment": segment or "All", "region": region or "All"},
+            "segment_options": ["All"] + CMIE_SEGMENTS,
+            "region_options": ["All"] + CMIE_REGIONS,
             "total_projects": total_projects,
             "total_project_cost": total_project_cost,
+            "under_implementation": under_implementation,
+            "announced": announced,
             "active_projects": active_projects,
             "recently_synced_at": recently_synced_at,
             "by_status": by_status,
             "by_state": by_state,
+            "by_state_cost": by_state_cost,
             "by_industry": by_industry,
+            "by_segment": by_segment,
+            "by_segment_cost": by_segment_cost,
+            "by_region": by_region,
+            "by_region_cost": by_region_cost,
         }
     except HTTPException:
         raise
@@ -2926,7 +2969,6 @@ def cmie_summary(token: str):
             except Exception:
                 pass
 
-
 @app.get("/api/cmie/projects")
 def cmie_projects(
     token: str,
@@ -2935,6 +2977,8 @@ def cmie_projects(
     industry: str = None,
     promoter: str = None,
     q: str = None,
+    segment: str = None,
+    region: str = None,
     limit: int = 100,
     offset: int = 0,
 ):
@@ -2946,8 +2990,7 @@ def cmie_projects(
         limit = max(1, min(int(limit or 100), 500))
         offset = max(0, int(offset or 0))
 
-        where_clauses = []
-        params = []
+        where_clauses, params = _cmie_segment_region_filter(segment, region)
 
         if status:
             where_clauses.append("project_status = %s")
@@ -2984,6 +3027,7 @@ def cmie_projects(
             SELECT id, cmie_project_id, project_name, promoter_name, project_cost,
                    project_status, industry, sector, ownership, state, district,
                    location, expected_completion, latest_event_date, latest_event,
+                   segment, region,
                    last_synced_at, created_at, updated_at
             FROM cmie_projects
             {where_sql}
@@ -3012,6 +3056,8 @@ def cmie_projects(
                 "expected_completion": r.get("expected_completion"),
                 "latest_event_date": r.get("latest_event_date"),
                 "latest_event": r.get("latest_event"),
+                "segment": r.get("segment"),
+                "region": r.get("region"),
                 "last_synced_at": r.get("last_synced_at").isoformat() if r.get("last_synced_at") else None,
                 "created_at": r.get("created_at").isoformat() if r.get("created_at") else None,
                 "updated_at": r.get("updated_at").isoformat() if r.get("updated_at") else None,
