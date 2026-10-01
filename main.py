@@ -2855,8 +2855,20 @@ def require_cmie_access(token: str):
 
     raise HTTPException(status_code=403, detail="Civil SBU access required")
 
-def _cmie_segment_region_filter(segment: str = None, region: str = None):
-    """Builds WHERE clauses for the Segment / Region filters. Empty or "All" = no filter."""
+# Project value bands. CMIE stores project_cost in Rs. million (1 crore = 10 million).
+CMIE_VALUE_RANGES = [
+    {"value": "All",       "label": "All Values",        "min": None,  "max": None},
+    {"value": "lt200",     "label": "Below ₹200 Cr",     "min": None,  "max": 2000},
+    {"value": "200-500",   "label": "₹200 – 500 Cr",     "min": 2000,  "max": 5000},
+    {"value": "500-1000",  "label": "₹500 – 1,000 Cr",   "min": 5000,  "max": 10000},
+    {"value": "1000-5000", "label": "₹1,000 – 5,000 Cr", "min": 10000, "max": 50000},
+    {"value": "gt5000",    "label": "Above ₹5,000 Cr",   "min": 50000, "max": None},
+    {"value": "nd",        "label": "Not disclosed",     "min": None,  "max": None},
+]
+
+
+def _cmie_segment_region_filter(segment: str = None, region: str = None, value_range: str = None):
+    """Builds WHERE clauses for the Segment / Region / Project Value filters. Empty or "All" = no filter."""
     clauses, params = [], []
     if segment and segment.strip().lower() != "all":
         clauses.append("segment = %s")
@@ -2864,16 +2876,30 @@ def _cmie_segment_region_filter(segment: str = None, region: str = None):
     if region and region.strip().lower() != "all":
         clauses.append("region = %s")
         params.append(region.strip())
+    if value_range and value_range.strip().lower() != "all":
+        band = next((b for b in CMIE_VALUE_RANGES if b["value"] == value_range.strip()), None)
+        if band is None:
+            raise HTTPException(status_code=400, detail="Unknown value_range")
+        if band["value"] == "nd":
+            clauses.append("(project_cost IS NULL OR project_cost = 0)")
+        else:
+            clauses.append("project_cost > 0")
+            if band["min"] is not None:
+                clauses.append("project_cost >= %s")
+                params.append(band["min"])
+            if band["max"] is not None:
+                clauses.append("project_cost < %s")
+                params.append(band["max"])
     return clauses, params
 
 @app.get("/api/cmie/summary")
-def cmie_summary(token: str, segment: str = None, region: str = None):
+def cmie_summary(token: str, segment: str = None, region: str = None, value_range: str = None):
     """Civil/Admin only. CMIE CapEx dashboard summary, filtered by segment/region."""
     require_cmie_access(token)
 
     conn = None
     try:
-        clauses, params = _cmie_segment_region_filter(segment, region)
+        clauses, params = _cmie_segment_region_filter(segment, region, value_range)
         where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         and_sql = (" AND " + " AND ".join(clauses)) if clauses else ""
 
@@ -2940,9 +2966,10 @@ def cmie_summary(token: str, segment: str = None, region: str = None):
 
         return {
             "status": "success",
-            "filters": {"segment": segment or "All", "region": region or "All"},
+            "filters": {"segment": segment or "All", "region": region or "All", "value_range": value_range or "All"},
             "segment_options": ["All"] + CMIE_SEGMENTS,
             "region_options": ["All"] + CMIE_REGIONS,
+            "value_range_options": [{"value": b["value"], "label": b["label"]} for b in CMIE_VALUE_RANGES],
             "total_projects": total_projects,
             "total_project_cost": total_project_cost,
             "under_implementation": under_implementation,
@@ -2979,6 +3006,7 @@ def cmie_projects(
     q: str = None,
     segment: str = None,
     region: str = None,
+    value_range: str = None,
     limit: int = 100,
     offset: int = 0,
 ):
@@ -2990,7 +3018,7 @@ def cmie_projects(
         limit = max(1, min(int(limit or 100), 500))
         offset = max(0, int(offset or 0))
 
-        where_clauses, params = _cmie_segment_region_filter(segment, region)
+        where_clauses, params = _cmie_segment_region_filter(segment, region, value_range)
 
         if status:
             where_clauses.append("project_status = %s")
