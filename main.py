@@ -2867,29 +2867,55 @@ CMIE_VALUE_RANGES = [
 ]
 
 
+def _cmie_split_filter(value: str = None):
+    """Turns "A,B,C" into ["A","B","C"]. Empty, or containing "All", means no filter (None)."""
+    if not value:
+        return None
+    items = [v.strip() for v in value.split(",") if v.strip()]
+    if not items or any(v.lower() == "all" for v in items):
+        return None
+    return items
+
+
 def _cmie_segment_region_filter(segment: str = None, region: str = None, value_range: str = None):
-    """Builds WHERE clauses for the Segment / Region / Project Value filters. Empty or "All" = no filter."""
+    """
+    Builds WHERE clauses for the Segment / Region / Project Value filters.
+    Each accepts one value or several comma-separated values (e.g. "Industrial,Commercial").
+    Values within one filter are OR'ed; the three filters are AND'ed together.
+    Empty or "All" = no filter.
+    """
     clauses, params = [], []
-    if segment and segment.strip().lower() != "all":
-        clauses.append("segment = %s")
-        params.append(segment.strip())
-    if region and region.strip().lower() != "all":
-        clauses.append("region = %s")
-        params.append(region.strip())
-    if value_range and value_range.strip().lower() != "all":
-        band = next((b for b in CMIE_VALUE_RANGES if b["value"] == value_range.strip()), None)
-        if band is None:
-            raise HTTPException(status_code=400, detail="Unknown value_range")
-        if band["value"] == "nd":
-            clauses.append("(project_cost IS NULL OR project_cost = 0)")
-        else:
-            clauses.append("project_cost > 0")
-            if band["min"] is not None:
-                clauses.append("project_cost >= %s")
-                params.append(band["min"])
-            if band["max"] is not None:
-                clauses.append("project_cost < %s")
-                params.append(band["max"])
+
+    segments = _cmie_split_filter(segment)
+    if segments:
+        clauses.append("segment = ANY(%s)")
+        params.append(segments)
+
+    regions = _cmie_split_filter(region)
+    if regions:
+        clauses.append("region = ANY(%s)")
+        params.append(regions)
+
+    bands = _cmie_split_filter(value_range)
+    if bands:
+        band_sql = []
+        for key in bands:
+            band = next((b for b in CMIE_VALUE_RANGES if b["value"] == key), None)
+            if band is None:
+                raise HTTPException(status_code=400, detail=f"Unknown value_range: {key}")
+            if band["value"] == "nd":
+                band_sql.append("(project_cost IS NULL OR project_cost = 0)")
+            else:
+                parts = ["project_cost > 0"]
+                if band["min"] is not None:
+                    parts.append("project_cost >= %s")
+                    params.append(band["min"])
+                if band["max"] is not None:
+                    parts.append("project_cost < %s")
+                    params.append(band["max"])
+                band_sql.append("(" + " AND ".join(parts) + ")")
+        clauses.append("(" + " OR ".join(band_sql) + ")")
+
     return clauses, params
 
 @app.get("/api/cmie/summary")
