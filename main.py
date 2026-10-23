@@ -4038,3 +4038,226 @@ def digest_dump(token: str = "", only: str = None):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename=digest_{stamp}.zip"},
     )
+# ─── Digest as .eml drafts: open in Outlook and hit Send ──────────────────────
+# Appended block. Changes nothing above it.
+#
+# Same users, same SBU mapping, same builders and thresholds as
+# /api/send-digest -- but instead of handing the HTML to Resend, it writes one
+# .eml file per recipient into a ZIP.
+#
+# Why .eml rather than the .html dump: copying rendered HTML out of a browser
+# and into Outlook loses the "Open ->" hyperlinks, and new Outlook has no
+# "Insert as Text". An .eml carries the HTML as the message body, so nothing
+# touches the clipboard and every link survives.
+#
+# The `X-Unsent: 1` header is what makes Outlook open the file as a composable
+# draft with a working Send button, rather than as a read-only received
+# message that would have to be forwarded.
+#
+#   /api/digest-eml                                  -> every active user
+#   /api/digest-eml?only=a@kec.com,b@kec.com         -> just these
+#   /api/digest-eml?prefill_to=true                  -> To: already filled in
+#
+# prefill_to defaults to FALSE: the To: line is left blank so a stray
+# double-click cannot fire a real brief at the distribution list. Turn it on
+# once you have checked a file and want to send for real.
+
+import zipfile          # stdlib
+from email.message import EmailMessage   # stdlib
+
+
+@app.get("/api/digest-eml")
+def digest_eml(token: str = "", only: str = None, prefill_to: bool = False):
+    """Return a ZIP of per-recipient .eml drafts, ready to open and send."""
+    if token:
+        user = get_user_from_token(token)
+        if not user or not user['is_admin']:
+            raise HTTPException(status_code=403, detail="Admin access required")
+
+    wanted = None
+    if only:
+        wanted = {e.strip().lower() for e in only.split(',') if e.strip()}
+
+    sender = os.environ.get('DIGEST_SENDER_EMAIL', '')
+
+    banner_bytes = None
+    try:
+        banner_path = os.path.join(os.path.dirname(__file__), 'assets', 'banner.jpg')
+        with open(banner_path, 'rb') as f:
+            banner_bytes = f.read()
+    except Exception:
+        pass
+
+    # ── Users ────────────────────────────────────────────────────────────────
+    local_conn = get_local_db()
+    local_cur = local_conn.cursor(cursor_factory=RealDictCursor)
+    local_cur.execute("""
+        SELECT id, name, email, sbu_profile, is_admin
+        FROM users WHERE is_active = TRUE
+    """)
+    users = local_cur.fetchall()
+    local_cur.close()
+    local_conn.close()
+
+    if wanted:
+        users = [u for u in users if (u['email'] or '').lower() in wanted]
+    if not users:
+        raise HTTPException(status_code=404, detail="No matching active users")
+
+    # ── Article pool: identical query to /api/send-digest ────────────────────
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, news_title, category_tag, sbu_tagging,
+               summary, link, published_date, competitor_tagging,
+               contract_value_inr_crore, geography, rank_score,
+               event_impact_score, competitor_tier, "Source",
+               cluster_id, is_representative_article, cluster_summary,
+               cluster_article_count, search_query_type, detected_client_authority
+        FROM processed_articles
+        WHERE published_date >= CURRENT_DATE - INTERVAL '90 days'
+          AND category_tag IS NOT NULL
+          AND category_tag NOT IN ('stock market', 'industry trends', 'leadership/management')
+        ORDER BY event_impact_score DESC NULLS LAST,
+                 rank_score DESC NULLS LAST, published_date DESC
+    """)
+    raw_articles = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    all_articles = []
+    for a in raw_articles:
+        competitors = [
+            c.strip() for c in (a.get('competitor_tagging') or '').split(',')
+            if c.strip() and c.strip() != '-'
+        ]
+        all_articles.append({
+            'id': a.get('id'),
+            'title': a.get('news_title', ''),
+            'category': a.get('category_tag', ''),
+            'sbu_tagging': a.get('sbu_tagging', ''),
+            'summary': a.get('summary', ''),
+            'cluster_summary': a.get('cluster_summary', ''),
+            'link': a.get('link', '#'),
+            'date_obj': a.get('published_date'),
+            'date': a.get('published_date').isoformat() if a.get('published_date') else '',
+            'source': a.get('Source', ''),
+            'competitors': competitors,
+            'contract_value': safe_float(a.get('contract_value_inr_crore')),
+            'geography': a.get('geography'),
+            'rank_score': a.get('rank_score') or 0,
+            'event_impact_score': a.get('event_impact_score') or 0,
+            'competitor_tier': a.get('competitor_tier'),
+            'cluster_id': a.get('cluster_id'),
+            'is_representative_article': a.get('is_representative_article'),
+            'cluster_article_count': a.get('cluster_article_count') or 1,
+            'search_query_type': a.get('search_query_type') or '',
+            'detected_client_authority': a.get('detected_client_authority') or '',
+        })
+
+    SBU_ALIAS_MAP = {
+        'intl t&d': ['intl t&d', 'international t&d'],
+        'india t&d': ['india t&d'],
+        'civil': ['civil'],
+        'transportation': ['transportation'],
+        'renewables': ['renewables'],
+        'oil & gas': ['oil & gas'],
+    }
+
+    def _safe_name(email: str) -> str:
+        return re.sub(r'[^A-Za-z0-9._-]', '_', email or 'unknown')
+
+    buf = io.BytesIO()
+    index_lines = ["Digest drafts generated " + datetime.now().strftime("%Y-%m-%d %H:%M"),
+                   "",
+                   "Open a .eml file, check the To: line, press Send.",
+                   "",
+                   "FILE | RECIPIENT | SUBJECT",
+                   "-" * 72]
+    skipped = []
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for u in users:
+            sbu_profile = (u.get('sbu_profile') or '').strip()
+            is_admin = u.get('is_admin', False)
+
+            if is_admin or sbu_profile == 'Admin':
+                sbus = digest_sbus(['Intl T&D', 'India T&D', 'Civil',
+                                    'Transportation', 'Renewables', 'Oil & Gas'])
+            else:
+                sbus = digest_sbus([s.strip() for s in sbu_profile.split(',') if s.strip()])
+
+            articles_by_sbu = {}
+            for sbu in sbus:
+                aliases = SBU_ALIAS_MAP.get(sbu.lower(), [sbu.lower()])
+                sbu_articles = [
+                    a for a in all_articles
+                    if any(alias in (a.get('sbu_tagging') or '').lower() for alias in aliases)
+                ]
+                if sbu_articles:
+                    articles_by_sbu[sbu] = sbu_articles
+
+            if not articles_by_sbu:
+                skipped.append(u['email'])
+                continue
+
+            is_multi_sbu = is_admin or sbu_profile == 'Admin' or len(sbus) > 1
+            if is_multi_sbu:
+                html = build_multi_sbu_crisp_html(u['name'], articles_by_sbu)
+                label = ", ".join(sbus) if not (is_admin or sbu_profile == 'Admin') else "All SBUs"
+                subject = "[KEC Intel] Weekly Brief — " + label
+            else:
+                single_sbu = sbus[0] if sbus else sbu_profile
+                html = build_single_sbu_category_crisp_html(
+                    u['name'], single_sbu, articles_by_sbu.get(single_sbu, []))
+                subject = f"[KEC Intel] Weekly Brief — {single_sbu}"
+
+            msg = EmailMessage()
+            msg['Subject'] = subject
+            if sender:
+                msg['From'] = sender
+            if prefill_to:
+                msg['To'] = u['email']
+            # Outlook opens this as an editable draft with a Send button
+            # instead of a read-only received message.
+            msg['X-Unsent'] = '1'
+
+            # A plain-text part for completeness; Outlook shows the HTML one.
+            msg.set_content(
+                "This brief is formatted in HTML. "
+                "If you are reading this line, your mail client is showing the "
+                "plain-text alternative."
+            )
+
+            if banner_bytes:
+                # Keep the cid: reference the template already uses and ship
+                # the image as a related part, exactly as Resend did.
+                msg.add_alternative(html, subtype='html')
+                html_part = msg.get_payload()[-1]
+                html_part.add_related(
+                    banner_bytes, maintype='image', subtype='jpeg',
+                    cid='<digest_banner@kec>', filename='banner.jpg',
+                )
+            else:
+                # No banner on disk: strip the tag so no broken image shows.
+                msg.add_alternative(
+                    re.sub(r'<img[^>]*cid:digest_banner@kec[^>]*>', '', html),
+                    subtype='html',
+                )
+
+            fname = f"{_safe_name(u['email'])}.eml"
+            zf.writestr(fname, msg.as_bytes())
+            to_shown = u['email'] if prefill_to else "(blank - fill in)"
+            index_lines.append(f"{fname} | {to_shown} | {subject}")
+
+        if skipped:
+            index_lines += ["", "No articles, nothing generated:"] + [f"  {e}" for e in skipped]
+        zf.writestr("_INDEX.txt", "\n".join(index_lines))
+
+    buf.seek(0)
+    stamp = datetime.now().strftime("%Y%m%d")
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=digest_eml_{stamp}.zip"},
+    )
